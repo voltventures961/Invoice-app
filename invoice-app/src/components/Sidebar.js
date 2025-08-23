@@ -1,9 +1,23 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { signOut } from 'firebase/auth';
-import { auth } from '../firebase/config';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '../firebase/config';
 import { COMPANY_INFO } from '../config';
 
 const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
+    const [companyName, setCompanyName] = useState(COMPANY_INFO.name);
+
+    useEffect(() => {
+        if (!auth.currentUser) return;
+        const settingsRef = doc(db, 'settings', auth.currentUser.uid);
+        const unsubscribe = onSnapshot(settingsRef, (docSnap) => {
+            if (docSnap.exists()) {
+                setCompanyName(docSnap.data().companyName || COMPANY_INFO.name);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
     const handleLogout = async () => {
         await signOut(auth);
     };
@@ -19,6 +33,7 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
         { name: 'Invoices', page: 'invoices' },
         { name: 'Stock Items', page: 'stock' },
         { name: 'Clients', page: 'clients' },
+        { name: 'Settings', page: 'settings' },
     ];
 
     const sidebarClasses = `
@@ -30,7 +45,7 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
     return (
         <div className={sidebarClasses}>
             <div className="p-5 text-2xl font-bold border-b border-gray-700">
-                {COMPANY_INFO.name}
+                {companyName}
             </div>
             <nav className="flex-1 px-2 py-4 space-y-2">
                 {navItems.map(item => (

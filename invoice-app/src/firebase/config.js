@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, setLogLevel } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 // --- IMPORTANT: Firebase Configuration ---
 // The code now automatically uses the environment's Firebase configuration.
@@ -21,6 +22,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 setLogLevel('debug'); // Optional: for detailed console logs
 
-export { auth, db };
+export { auth, db, storage };

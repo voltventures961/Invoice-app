@@ -10,12 +10,13 @@ import NewDocumentPage from './components/NewDocumentPage';
 import ViewDocumentPage from './components/ViewDocumentPage';
 import ProformasPage from './components/ProformasPage';
 import InvoicesPage from './components/InvoicesPage';
+import SettingsPage from './components/SettingsPage';
 import Sidebar from './components/Sidebar';
 
 export default function App() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [page, setPage] = useState('dashboard'); // 'login', 'register', 'dashboard', 'proformas', 'invoices', 'stock', 'clients', 'newDocument', 'viewDocument'
+    const [page, setPage] = useState('dashboard'); // 'login', 'register', 'dashboard', 'proformas', 'invoices', 'stock', 'clients', 'newDocument', 'viewDocument', 'settings'
     const [editingDocument, setEditingDocument] = useState(null);
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
@@ -24,7 +25,14 @@ export default function App() {
             setUser(currentUser);
             setLoading(false);
             if (currentUser) {
-                setPage('dashboard');
+                const creationTime = new Date(currentUser.metadata.creationTime).getTime();
+                const lastSignInTime = new Date(currentUser.metadata.lastSignInTime).getTime();
+                // If the user signed in within 2 seconds of creation, they are likely new.
+                if (lastSignInTime - creationTime < 2000) {
+                    setPage('settings');
+                } else {
+                    setPage('dashboard');
+                }
             } else {
                 setPage('login');
             }
@@ -77,6 +85,7 @@ export default function App() {
                     {page === 'clients' && <ClientsPage />}
                     {page === 'newDocument' && <NewDocumentPage navigateTo={navigateTo} documentToEdit={editingDocument} />}
                     {page === 'viewDocument' && <ViewDocumentPage documentToView={editingDocument} navigateTo={navigateTo} />}
+                    {page === 'settings' && <SettingsPage />}
                 </main>
             </div>
         );

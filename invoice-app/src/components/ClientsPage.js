@@ -26,8 +26,9 @@ const getNextClientId = async (userId) => {
 
 const ClientsPage = () => {
     const [clients, setClients] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
     const [showForm, setShowForm] = useState(false);
-    const [newClient, setNewClient] = useState({ name: '', phone: '', location: '', vatNumber: '' });
+    const [newClient, setNewClient] = useState({ name: '', email: '', phone: '', location: '', vatNumber: '' });
     const [editingClient, setEditingClient] = useState(null);
     const fileInputRef = useRef(null);
 
@@ -86,7 +87,7 @@ const ClientsPage = () => {
     };
 
     const resetForm = () => {
-        setNewClient({ name: '', phone: '', location: '', vatNumber: '' });
+        setNewClient({ name: '', email: '', phone: '', location: '', vatNumber: '' });
         setEditingClient(null);
         setShowForm(false);
     };
@@ -145,6 +146,13 @@ const ClientsPage = () => {
         }
     };
 
+    const filteredClients = clients.filter(client => {
+        const searchTermLower = searchTerm.toLowerCase();
+        return Object.values(client).some(value =>
+            typeof value === 'string' && value.toLowerCase().includes(searchTermLower)
+        );
+    });
+
     return (
         <div>
             <h1 className="text-3xl font-bold text-gray-800 mb-6">Clients</h1>
@@ -163,6 +171,7 @@ const ClientsPage = () => {
                     <form onSubmit={handleSaveClient}>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <input type="text" name="name" value={newClient.name} onChange={handleInputChange} placeholder="Client Name" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
+                            <input type="email" name="email" value={newClient.email} onChange={handleInputChange} placeholder="Email Address" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                             <input type="text" name="phone" value={newClient.phone} onChange={handleInputChange} placeholder="Phone Number" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                             <input type="text" name="location" value={newClient.location} onChange={handleInputChange} placeholder="Location" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                             <input type="text" name="vatNumber" value={newClient.vatNumber} onChange={handleInputChange} placeholder="VAT Number" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
@@ -175,12 +184,22 @@ const ClientsPage = () => {
             )}
 
             <div className="bg-white p-6 rounded-lg shadow-lg">
+                <div className="mb-4">
+                    <input
+                        type="text"
+                        placeholder="Search clients..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full px-4 py-2 border rounded-lg"
+                    />
+                </div>
                  <div className="overflow-x-auto">
                     <table className="min-w-full bg-white">
                         <thead className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
                             <tr>
                                 <th className="py-3 px-6 text-left">ID</th>
                                 <th className="py-3 px-6 text-left">Name</th>
+                                <th className="py-3 px-6 text-left">Email</th>
                                 <th className="py-3 px-6 text-left">Phone</th>
                                 <th className="py-3 px-6 text-left">Location</th>
                                 <th className="py-3 px-6 text-left">VAT Number</th>
@@ -188,10 +207,11 @@ const ClientsPage = () => {
                             </tr>
                         </thead>
                         <tbody className="text-gray-600 text-sm font-light">
-                            {clients.map(client => (
+                            {filteredClients.map(client => (
                                 <tr key={client.id} className="border-b border-gray-200 hover:bg-gray-100">
                                     <td className="py-3 px-6 text-left font-bold">{client.clientId}</td>
                                     <td className="py-3 px-6 text-left font-medium">{client.name}</td>
+                                    <td className="py-3 px-6 text-left">{client.email}</td>
                                     <td className="py-3 px-6 text-left">{client.phone}</td>
                                     <td className="py-3 px-6 text-left">{client.location}</td>
                                     <td className="py-3 px-6 text-left">{client.vatNumber}</td>
