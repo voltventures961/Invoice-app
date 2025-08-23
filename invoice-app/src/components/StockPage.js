@@ -27,6 +27,7 @@ const getNextItemId = async (userId) => {
 
 const StockPage = () => {
     const [items, setItems] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
     const [showForm, setShowForm] = useState(false);
     const [newItem, setNewItem] = useState({ name: '', category: '', subCategory: '', brand: '', partNumber: '', specs: '', type: '', color: '', buyingPrice: 0, sellingPrice: 0 });
     const [editingItem, setEditingItem] = useState(null); // To hold the item being edited
@@ -187,6 +188,13 @@ const StockPage = () => {
         { name: 'sellingPrice', placeholder: 'Selling Price', type: 'number' },
     ];
 
+    const filteredItems = items.filter(item => {
+        const searchTermLower = searchTerm.toLowerCase();
+        return Object.values(item).some(value =>
+            typeof value === 'string' && value.toLowerCase().includes(searchTermLower)
+        );
+    });
+
     return (
         <div>
             <h1 className="text-3xl font-bold text-gray-800 mb-6">Stock Items</h1>
@@ -205,16 +213,19 @@ const StockPage = () => {
                     <form onSubmit={handleSaveItem}>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {fields.map(field => (
-                                <input
-                                    key={field.name}
-                                    type={field.type || 'text'}
-                                    name={field.name}
-                                    value={newItem[field.name]}
-                                    onChange={handleInputChange}
-                                    placeholder={field.placeholder}
-                                    required={field.required}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                                />
+                                <div key={field.name}>
+                                    <label htmlFor={field.name} className="block text-sm font-medium text-gray-700">{field.placeholder}</label>
+                                    <input
+                                        id={field.name}
+                                        type={field.type || 'text'}
+                                        name={field.name}
+                                        value={newItem[field.name]}
+                                        onChange={handleInputChange}
+                                        placeholder={field.placeholder}
+                                        required={field.required}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                    />
+                                </div>
                             ))}
                         </div>
                         <div className="mt-4 flex justify-end">
@@ -225,6 +236,15 @@ const StockPage = () => {
             )}
 
             <div className="bg-white p-6 rounded-lg shadow-lg">
+                <div className="mb-4">
+                    <input
+                        type="text"
+                        placeholder="Search items..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full px-4 py-2 border rounded-lg"
+                    />
+                </div>
                  <div className="overflow-x-auto">
                     <table className="min-w-full bg-white">
                         <thead className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
@@ -240,7 +260,7 @@ const StockPage = () => {
                             </tr>
                         </thead>
                         <tbody className="text-gray-600 text-sm font-light">
-                            {items.map(item => (
+                            {filteredItems.map(item => (
                                 <tr key={item.id} className="border-b border-gray-200 hover:bg-gray-100">
                                     <td className="py-3 px-6 text-left font-bold">{item.itemId}</td>
                                     <td className="py-3 px-6 text-left font-medium">{item.name}</td>

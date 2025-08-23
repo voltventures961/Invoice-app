@@ -25,10 +25,15 @@ const getNextDocNumber = async (userId, type) => {
     }
 };
 
+import { useRef } from 'react';
+
 const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [docType, setDocType] = useState('proforma');
     const [clients, setClients] = useState([]);
     const [selectedClient, setSelectedClient] = useState('');
+    const [clientSearch, setClientSearch] = useState('');
+    const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
+    const clientDropdownRef = useRef(null);
     const [stockItems, setStockItems] = useState([]);
     const [selectedStockItem, setSelectedStockItem] = useState('');
     const [lineItems, setLineItems] = useState([]);
@@ -54,7 +59,6 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         fetchInitialData();
 
         if (documentToEdit) {
-            // This flag is passed from the ProformasPage 'Convert to Invoice' button
             if (documentToEdit.isConversion) {
                 setMode('convert');
                 setPageTitle('Convert to Invoice');
@@ -64,8 +68,8 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                 setPageTitle(`Edit ${documentToEdit.type}`);
                 setDocType(documentToEdit.type);
             }
-            // Populate form for both editing and converting
             setSelectedClient(documentToEdit.client.id);
+            setClientSearch(documentToEdit.client.name);
             setLineItems(documentToEdit.items);
             setLaborPrice(documentToEdit.laborPrice || 0);
             setNotes(documentToEdit.notes || '');
@@ -74,11 +78,22 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         } else {
             setMode('create');
             setPageTitle('Create New Document');
-            setDocType('proforma'); // Default to proforma for new docs
-            // Get a new proforma number for creation
+            setDocType('proforma');
             getNextDocNumber(auth.currentUser.uid, 'proforma').then(setDocumentNumber);
         }
     }, [documentToEdit, fetchInitialData]);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target)) {
+                setIsClientDropdownVisible(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
 
     const handleAddItemToList = () => {
         if (!selectedStockItem) return;
@@ -179,12 +194,39 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     </div>
                 </div>
 
-                <div className="mb-8 no-print">
+                <div className="mb-8 no-print" ref={clientDropdownRef}>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Select Client</label>
-                    <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
-                        <option value="">-- Choose a client --</option>
-                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <input
+                        type="text"
+                        value={clientSearch}
+                        onChange={e => {
+                            setClientSearch(e.target.value);
+                            setSelectedClient('');
+                            setIsClientDropdownVisible(true);
+                        }}
+                        onFocus={() => setIsClientDropdownVisible(true)}
+                        placeholder="Search or select a client"
+                        className="w-full p-2 border border-gray-300 rounded-md"
+                    />
+                    {isClientDropdownVisible && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            {clients
+                                .filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+                                .map(c => (
+                                    <div
+                                        key={c.id}
+                                        onClick={() => {
+                                            setSelectedClient(c.id);
+                                            setClientSearch(c.name);
+                                            setIsClientDropdownVisible(false);
+                                        }}
+                                        className="p-2 hover:bg-gray-100 cursor-pointer"
+                                    >
+                                        {c.name}
+                                    </div>
+                                ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
@@ -192,7 +234,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     <div className="flex items-center space-x-2">
                         <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
                             <option value="">-- Select an item --</option>
-                            {stockItems.map(i => <option key={i.id} value={i.id}>{i.name} ({i.partNumber})</option>)}
+                            {stockItems.map(i => <option key={i.id} value={i.id}>{`${i.name}${i.brand ? ` - ${i.brand}` : ''}${i.category ? ` - ${i.category}` : ''}`}</option>)}
                         </select>
                         <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Add</button>
                     </div>
