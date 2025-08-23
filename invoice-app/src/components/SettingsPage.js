@@ -4,7 +4,12 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../firebase/config';
 
 const SettingsPage = () => {
-    const [companyName, setCompanyName] = useState('');
+    const [businessDetails, setBusinessDetails] = useState({
+        name: '',
+        address: '',
+        phone: '',
+        email: '',
+    });
     const [logoUrl, setLogoUrl] = useState('');
     const [imageFile, setImageFile] = useState(null);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -19,7 +24,12 @@ const SettingsPage = () => {
                 const docSnap = await getDoc(settingsRef);
                 if (docSnap.exists()) {
                     const settings = docSnap.data();
-                    setCompanyName(settings.companyName || '');
+                    setBusinessDetails({
+                        name: settings.businessDetails?.name || '',
+                        address: settings.businessDetails?.address || '',
+                        phone: settings.businessDetails?.phone || '',
+                        email: settings.businessDetails?.email || '',
+                    });
                     setLogoUrl(settings.logoUrl || '');
                 }
             } catch (error) {
@@ -38,6 +48,10 @@ const SettingsPage = () => {
         }
     };
 
+    const sanitizeFilename = (filename) => {
+        return filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    };
+
     const handleSave = async () => {
         if (!auth.currentUser) return;
         setLoading(true);
@@ -46,7 +60,8 @@ const SettingsPage = () => {
         let newLogoUrl = logoUrl;
 
         if (imageFile) {
-            const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${imageFile.name}`);
+            const sanitizedFilename = sanitizeFilename(imageFile.name);
+            const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${sanitizedFilename}`);
             const uploadTask = uploadBytesResumable(storageRef, imageFile);
 
             try {
@@ -76,7 +91,7 @@ const SettingsPage = () => {
 
         const settingsRef = doc(db, 'settings', auth.currentUser.uid);
         try {
-            await setDoc(settingsRef, { companyName, logoUrl: newLogoUrl }, { merge: true });
+            await setDoc(settingsRef, { businessDetails, logoUrl: newLogoUrl }, { merge: true });
             setFeedback({ type: 'success', message: 'Settings saved successfully!' });
         } catch (error) {
             console.error("Error saving settings:", error);
@@ -88,7 +103,12 @@ const SettingsPage = () => {
         }
     };
 
-    if (loading && !companyName) { // Check !companyName to avoid flicker on save
+    const handleDetailsChange = (e) => {
+        const { name, value } = e.target;
+        setBusinessDetails(prev => ({ ...prev, [name]: value }));
+    };
+
+    if (loading && !businessDetails.name) { // Check !businessDetails.name to avoid flicker on save
         return <p>Loading settings...</p>;
     }
 
@@ -97,17 +117,52 @@ const SettingsPage = () => {
             <h1 className="text-3xl font-bold text-gray-800 mb-6">Settings</h1>
             <div className="bg-white p-8 rounded-lg shadow-lg">
                 <div className="space-y-6">
+                    <h2 className="text-xl font-semibold text-gray-700 border-b pb-2">Business Details</h2>
                     <div>
-                        <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">Company Name</label>
+                        <label htmlFor="name" className="block text-sm font-medium text-gray-700">Company Name</label>
                         <input
                             type="text"
-                            id="companyName"
-                            value={companyName}
-                            onChange={(e) => setCompanyName(e.target.value)}
+                            id="name"
+                            name="name"
+                            value={businessDetails.name}
+                            onChange={handleDetailsChange}
                             className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                         />
                     </div>
                     <div>
+                        <label htmlFor="address" className="block text-sm font-medium text-gray-700">Address</label>
+                        <textarea
+                            id="address"
+                            name="address"
+                            value={businessDetails.address}
+                            onChange={handleDetailsChange}
+                            rows="3"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="phone" className="block text-sm font-medium text-gray-700">Phone Number</label>
+                        <input
+                            type="text"
+                            id="phone"
+                            name="phone"
+                            value={businessDetails.phone}
+                            onChange={handleDetailsChange}
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email Address</label>
+                        <input
+                            type="email"
+                            id="email"
+                            name="email"
+                            value={businessDetails.email}
+                            onChange={handleDetailsChange}
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div className="border-t pt-6">
                         <label className="block text-sm font-medium text-gray-700">Company Logo</label>
                         <div className="mt-2 flex items-center space-x-4">
                             {logoUrl && <img src={logoUrl} alt="Company Logo" className="h-16 w-16 rounded-full object-cover" />}

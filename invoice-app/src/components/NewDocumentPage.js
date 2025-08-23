@@ -35,14 +35,20 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
     const clientDropdownRef = useRef(null);
     const [stockItems, setStockItems] = useState([]);
-    const [selectedStockItem, setSelectedStockItem] = useState('');
+    const [itemSearch, setItemSearch] = useState('');
+    const [isItemDropdownVisible, setIsItemDropdownVisible] = useState(false);
+    const itemDropdownRef = useRef(null);
     const [lineItems, setLineItems] = useState([]);
-    const [laborPrice, setLaborPrice] = useState(0);
+    const [mandays, setMandays] = useState(0);
+    const [people, setPeople] = useState(1);
+    const [dailyRate, setDailyRate] = useState(100); // Hardcoded for now
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
     const [pageTitle, setPageTitle] = useState('Create New Document');
     const [mode, setMode] = useState('create'); // 'create', 'edit', 'convert'
+
+    const laborPrice = mandays * people * dailyRate;
 
     const fetchInitialData = useCallback(async () => {
         if (!auth.currentUser) return;
@@ -71,7 +77,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             setSelectedClient(documentToEdit.client.id);
             setClientSearch(documentToEdit.client.name);
             setLineItems(documentToEdit.items);
-            setLaborPrice(documentToEdit.laborPrice || 0);
+            setMandays(documentToEdit.mandays || 0);
+            setPeople(documentToEdit.people || 1);
+            setDailyRate(documentToEdit.dailyRate || 100);
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
             setDocumentNumber(documentToEdit.documentNumber);
@@ -88,6 +96,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target)) {
                 setIsClientDropdownVisible(false);
             }
+            if (itemDropdownRef.current && !itemDropdownRef.current.contains(event.target)) {
+                setIsItemDropdownVisible(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
@@ -95,12 +106,11 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         };
     }, []);
 
-    const handleAddItemToList = () => {
-        if (!selectedStockItem) return;
-        const item = stockItems.find(i => i.id === selectedStockItem);
+    const handleAddItemToList = (item) => {
         if (item) {
             setLineItems([...lineItems, { ...item, itemId: item.id, qty: 1, unitPrice: item.sellingPrice }]);
-            setSelectedStockItem('');
+            setItemSearch('');
+            setIsItemDropdownVisible(false);
         }
     };
 
@@ -119,7 +129,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
 
     const calculateSubtotal = () => {
         const itemsTotal = lineItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
-        return itemsTotal + parseFloat(laborPrice || 0);
+        return itemsTotal + laborPrice;
     };
 
     const subtotal = calculateSubtotal();
@@ -127,7 +137,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const total = subtotal + vatAmount;
 
     const handleSaveDocument = async () => {
-        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0)) {
+        if (!selectedClient || (lineItems.length === 0 && laborPrice === 0)) {
             const modal = document.getElementById('error-modal');
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.add('hidden'), 3000);
@@ -140,7 +150,10 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             client: clientData,
             date: new Date(),
             items: lineItems,
-            laborPrice: parseFloat(laborPrice || 0),
+            mandays,
+            people,
+            dailyRate,
+            laborPrice,
             notes,
             vatApplied,
             subtotal,
@@ -167,6 +180,16 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             console.error("Error saving document: ", error);
         }
     };
+
+    const filteredStockItems = stockItems.filter(item => {
+        const searchTerm = itemSearch.toLowerCase();
+        return (
+            item.name.toLowerCase().includes(searchTerm) ||
+            (item.brand && item.brand.toLowerCase().includes(searchTerm)) ||
+            (item.category && item.category.toLowerCase().includes(searchTerm)) ||
+            (item.partNumber && item.partNumber.toLowerCase().includes(searchTerm))
+        );
+    });
 
     return (
         <div>
@@ -229,14 +252,33 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     )}
                 </div>
 
-                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
+                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print" ref={itemDropdownRef}>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
-                    <div className="flex items-center space-x-2">
-                        <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
-                            <option value="">-- Select an item --</option>
-                            {stockItems.map(i => <option key={i.id} value={i.id}>{`${i.name}${i.brand ? ` - ${i.brand}` : ''}${i.category ? ` - ${i.category}` : ''}`}</option>)}
-                        </select>
-                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Add</button>
+                    <div className="relative">
+                        <input
+                            type="text"
+                            value={itemSearch}
+                            onChange={e => {
+                                setItemSearch(e.target.value);
+                                setIsItemDropdownVisible(true);
+                            }}
+                            onFocus={() => setIsItemDropdownVisible(true)}
+                            placeholder="Search for an item..."
+                            className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                        {isItemDropdownVisible && filteredStockItems.length > 0 && (
+                            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                                {filteredStockItems.map(item => (
+                                    <div
+                                        key={item.id}
+                                        onClick={() => handleAddItemToList(item)}
+                                        className="p-2 hover:bg-gray-100 cursor-pointer"
+                                    >
+                                        {`${item.name}${item.brand ? ` - ${item.brand}` : ''}${item.category ? ` - ${item.category}` : ''}`}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -279,9 +321,20 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows="3" className="w-full p-2 border rounded-md"></textarea>
                     </div>
                     <div className="w-full md:w-1/3 mt-6 md:mt-0">
-                        <div className="flex justify-between py-1">
-                            <span className="font-medium text-gray-600">Labor Price:</span>
-                            <input type="number" value={laborPrice} onChange={(e) => setLaborPrice(e.target.value)} className="w-24 p-1 border rounded-md text-right" />
+                        <div className="space-y-2">
+                            <h4 className="font-semibold text-gray-700">Mandays Cost</h4>
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm text-gray-600">People</label>
+                                <input type="number" value={people} onChange={(e) => setPeople(parseFloat(e.target.value) || 1)} className="w-20 p-1 border rounded-md text-right" />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm text-gray-600">Mandays</label>
+                                <input type="number" value={mandays} onChange={(e) => setMandays(parseFloat(e.target.value) || 0)} className="w-20 p-1 border rounded-md text-right" />
+                            </div>
+                             <div className="flex justify-between py-1">
+                                <span className="font-medium text-gray-600">Labor Total:</span>
+                                <span className="font-medium text-gray-800">${laborPrice.toFixed(2)}</span>
+                            </div>
                         </div>
                         <div className="flex justify-between py-1 mt-2">
                             <span className="font-medium text-gray-700">Subtotal:</span>
