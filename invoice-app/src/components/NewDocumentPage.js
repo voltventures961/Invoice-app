@@ -1,0 +1,249 @@
+import React, { useState, useEffect } from 'react';
+import { collection, query, getDocs, addDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase/config';
+
+const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
+    const [docType, setDocType] = useState('proforma');
+    const [clients, setClients] = useState([]);
+    const [selectedClient, setSelectedClient] = useState('');
+    const [stockItems, setStockItems] = useState([]);
+    const [selectedStockItem, setSelectedStockItem] = useState('');
+    const [lineItems, setLineItems] = useState([]);
+    const [laborPrice, setLaborPrice] = useState(0);
+    const [notes, setNotes] = useState('');
+    const [vatApplied, setVatApplied] = useState(false);
+    const [documentNumber, setDocumentNumber] = useState('');
+
+    useEffect(() => {
+        const fetchInitialData = async () => {
+            if (!auth.currentUser) return;
+            // Fetch clients
+            const clientQuery = query(collection(db, `clients/${auth.currentUser.uid}/userClients`));
+            const clientSnapshot = await getDocs(clientQuery);
+            setClients(clientSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+            // Fetch stock items
+            const itemQuery = query(collection(db, `items/${auth.currentUser.uid}/userItems`));
+            const itemSnapshot = await getDocs(itemQuery);
+            setStockItems(itemSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        };
+        fetchInitialData();
+
+        if (documentToEdit) {
+            // Logic for converting a proforma to an invoice
+            setDocType('invoice');
+            setSelectedClient(documentToEdit.client.id);
+            setLineItems(documentToEdit.items);
+            setLaborPrice(documentToEdit.laborPrice || 0);
+            setNotes(documentToEdit.notes || '');
+            setVatApplied(documentToEdit.vatApplied || false);
+            setDocumentNumber(`INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
+        } else {
+            setDocumentNumber(`PI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
+        }
+    }, [documentToEdit]);
+
+    const handleAddItemToList = () => {
+        if (!selectedStockItem) return;
+        const item = stockItems.find(i => i.id === selectedStockItem);
+        if (item) {
+            setLineItems([...lineItems, {
+                ...item,
+                itemId: item.id,
+                qty: 1,
+                unitPrice: item.sellingPrice
+            }]);
+            setSelectedStockItem('');
+        }
+    };
+
+    const handleLineItemChange = (index, field, value) => {
+        const updatedItems = [...lineItems];
+        const numValue = parseFloat(value);
+        if (!isNaN(numValue)) {
+            updatedItems[index][field] = numValue;
+            setLineItems(updatedItems);
+        }
+    };
+
+    const handleRemoveLineItem = (index) => {
+        const updatedItems = lineItems.filter((_, i) => i !== index);
+        setLineItems(updatedItems);
+    };
+
+    const calculateSubtotal = () => {
+        const itemsTotal = lineItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
+        return itemsTotal + parseFloat(laborPrice || 0);
+    };
+
+    const subtotal = calculateSubtotal();
+    const vatAmount = vatApplied ? subtotal * 0.11 : 0;
+    const total = subtotal + vatAmount;
+
+    const handleSaveDocument = async () => {
+        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0) ) {
+            // Using a custom modal instead of alert
+            const modal = document.getElementById('error-modal');
+            modal.classList.remove('hidden');
+            setTimeout(() => modal.classList.add('hidden'), 3000);
+            return;
+        }
+        if (!auth.currentUser) return;
+
+        const clientData = clients.find(c => c.id === selectedClient);
+
+        const documentData = {
+            type: docType,
+            documentNumber,
+            client: clientData,
+            date: new Date(),
+            items: lineItems,
+            laborPrice: parseFloat(laborPrice || 0),
+            notes,
+            vatApplied,
+            subtotal,
+            vatAmount,
+            total
+        };
+
+        try {
+            await addDoc(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), documentData);
+            navigateTo('dashboard');
+        } catch (error) {
+            console.error("Error saving document: ", error);
+        }
+    };
+
+    return (
+        <div>
+            <style>
+                {`
+                @media print {
+                    .no-print {
+                        display: none;
+                    }
+                    .buying-price-col {
+                        display: none;
+                    }
+                }
+                `}
+            </style>
+            {/* Error Modal */}
+            <div id="error-modal" className="hidden fixed top-5 right-5 bg-red-500 text-white py-2 px-4 rounded-lg shadow-lg z-50 no-print">
+                Please select a client and add at least one item or labor charge.
+            </div>
+
+            <h1 className="text-3xl font-bold text-gray-800 mb-6 no-print">{documentToEdit ? 'Create Invoice from Proforma' : 'Create New Document'}</h1>
+            <div className="bg-white p-8 rounded-lg shadow-lg">
+                {/* Header */}
+                <div className="flex justify-between items-start mb-8 no-print">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-800 uppercase">{docType}</h2>
+                        <p className="text-gray-500">{documentNumber}</p>
+                    </div>
+                    <div className="flex space-x-4">
+                        <div className="flex items-center">
+                            <label htmlFor="vat" className="mr-2 font-medium text-gray-700">Apply VAT (11%)</label>
+                            <input type="checkbox" id="vat" checked={vatApplied} onChange={(e) => setVatApplied(e.target.checked)} className="h-5 w-5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
+                        </div>
+                    </div>
+                </div>
+
+                {/* Client Selection */}
+                <div className="mb-8 no-print">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Select Client</label>
+                    <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
+                        <option value="">-- Choose a client --</option>
+                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                </div>
+
+                {/* Add Items */}
+                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
+                    <div className="flex items-center space-x-2">
+                        <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
+                            <option value="">-- Select an item --</option>
+                            {stockItems.map(i => <option key={i.id} value={i.id}>{i.partNumber} - {i.brand} ({i.specs})</option>)}
+                        </select>
+                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200">Add</button>
+                    </div>
+                </div>
+
+                {/* Line Items Table */}
+                <div className="overflow-x-auto mb-8">
+                    <table className="min-w-full">
+                        <thead className="bg-gray-100">
+                            <tr>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Item/Part #</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Description</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Qty</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Unit Price</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600 buying-price-col">Buying Price</th>
+                                <th className="py-2 px-4 text-right text-sm font-semibold text-gray-600">Total</th>
+                                <th className="py-2 px-4 text-center text-sm font-semibold text-gray-600"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {lineItems.map((item, index) => (
+                                <tr key={index} className="border-b">
+                                    <td className="py-2 px-4">{item.partNumber}</td>
+                                    <td className="py-2 px-4">{item.brand} - {item.specs}</td>
+                                    <td className="py-2 px-4">
+                                        <input type="number" value={item.qty} onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} className="w-20 p-1 border rounded-md" />
+                                    </td>
+                                    <td className="py-2 px-4">
+                                        <input type="number" value={item.unitPrice} onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} className="w-24 p-1 border rounded-md" />
+                                    </td>
+                                    <td className="py-2 px-4 text-gray-400 buying-price-col">${item.buyingPrice.toFixed(2)}</td>
+                                    <td className="py-2 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
+                                    <td className="py-2 px-4 text-center">
+                                        <button onClick={() => handleRemoveLineItem(index)} className="text-red-500 hover:text-red-700">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Notes, Labor, and Totals */}
+                <div className="flex flex-col md:flex-row justify-between">
+                    <div className="w-full md:w-1/2">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Notes / Description</label>
+                        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows="3" className="w-full p-2 border rounded-md"></textarea>
+                    </div>
+                    <div className="w-full md:w-1/3 mt-6 md:mt-0">
+                        <div className="flex justify-between py-1">
+                            <span className="font-medium text-gray-600">Labor Price:</span>
+                            <input type="number" value={laborPrice} onChange={(e) => setLaborPrice(e.target.value)} className="w-24 p-1 border rounded-md text-right" />
+                        </div>
+                        <div className="flex justify-between py-1 mt-2">
+                            <span className="font-medium text-gray-700">Subtotal:</span>
+                            <span className="font-medium text-gray-800">${subtotal.toFixed(2)}</span>
+                        </div>
+                        {vatApplied && (
+                        <div className="flex justify-between py-1 text-gray-600">
+                            <span>VAT (11%):</span>
+                            <span>${vatAmount.toFixed(2)}</span>
+                        </div>
+                        )}
+                        <div className="flex justify-between py-2 mt-2 border-t-2 border-gray-300">
+                            <span className="text-xl font-bold text-gray-900">Total:</span>
+                            <span className="text-xl font-bold text-gray-900">${total.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Actions */}
+                <div className="mt-10 flex justify-end space-x-4 no-print">
+                    <button onClick={() => navigateTo('dashboard')} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200">Cancel</button>
+                    <button onClick={handleSaveDocument} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200">Save {docType}</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default NewDocumentPage;
