@@ -3,19 +3,32 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import { COMPANY_INFO } from '../config';
 
-const Sidebar = ({ navigateTo, currentPage }) => {
+const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
     const handleLogout = async () => {
         await signOut(auth);
     };
 
+    const handleNavigate = (page) => {
+        navigateTo(page);
+        setOpen(false); // Close sidebar on navigation
+    };
+
     const navItems = [
         { name: 'Dashboard', page: 'dashboard' },
+        { name: 'Proformas', page: 'proformas' },
+        { name: 'Invoices', page: 'invoices' },
         { name: 'Stock Items', page: 'stock' },
         { name: 'Clients', page: 'clients' },
     ];
 
+    const sidebarClasses = `
+        bg-gray-800 text-white w-64 space-y-6 py-7 px-2 absolute inset-y-0 left-0 transform
+        ${isOpen ? "translate-x-0" : "-translate-x-full"} md:relative md:translate-x-0
+        transition duration-200 ease-in-out z-20 flex flex-col shadow-lg
+    `;
+
     return (
-        <div className="w-64 bg-gray-800 text-white flex-col hidden sm:flex shadow-lg">
+        <div className={sidebarClasses}>
             <div className="p-5 text-2xl font-bold border-b border-gray-700">
                 {COMPANY_INFO.name}
             </div>
@@ -23,7 +36,7 @@ const Sidebar = ({ navigateTo, currentPage }) => {
                 {navItems.map(item => (
                     <button
                         key={item.name}
-                        onClick={() => navigateTo(item.page)}
+                        onClick={() => handleNavigate(item.page)}
                         className={`w-full text-left flex items-center px-4 py-2 text-sm font-medium rounded-md transition-colors duration-200 ${
                             currentPage === item.page ? 'bg-gray-900 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white'
                         }`}

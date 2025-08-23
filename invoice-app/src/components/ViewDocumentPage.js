@@ -1,8 +1,21 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { COMPANY_INFO } from '../config';
 
 const ViewDocumentPage = ({ documentToView, navigateTo }) => {
     const printRef = useRef();
+
+    useEffect(() => {
+        if (documentToView) {
+            const originalTitle = document.title;
+            const { type, documentNumber, client } = documentToView;
+            document.title = `${type}-${documentNumber}-${client.name}`;
+
+            // Cleanup function to reset title
+            return () => {
+                document.title = originalTitle;
+            };
+        }
+    }, [documentToView]);
 
     const handlePrint = () => {
         window.print();
