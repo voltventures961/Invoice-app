@@ -1,6 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, getDocs, addDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback } from 'react';
+import { collection, query, getDocs, addDoc, updateDoc, doc, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
+
+// Helper to get next document number
+const getNextDocNumber = async (userId, type) => {
+    const year = new Date().getFullYear();
+    const counterRef = doc(db, `counters/${userId}/documentCounters`, `${type}Counter`);
+    const prefix = type === 'invoice' ? 'INV' : 'PRO';
+
+    try {
+        const newId = await runTransaction(db, async (transaction) => {
+            const counterDoc = await transaction.get(counterRef);
+            let newLastId = 1;
+            if (counterDoc.exists()) {
+                newLastId = counterDoc.data().lastId + 1;
+            }
+            transaction.set(counterRef, { lastId: newLastId }, { merge: true });
+            return newLastId;
+        });
+        return `${prefix}-${year}-${String(newId).padStart(3, '0')}`;
+    } catch (e) {
+        console.error("Failed to get next document number:", e);
+        throw e;
+    }
+};
 
 const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [docType, setDocType] = useState('proforma');
@@ -13,46 +36,55 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
+    const [pageTitle, setPageTitle] = useState('Create New Document');
+    const [mode, setMode] = useState('create'); // 'create', 'edit', 'convert'
+
+    const fetchInitialData = useCallback(async () => {
+        if (!auth.currentUser) return;
+        const clientQuery = query(collection(db, `clients/${auth.currentUser.uid}/userClients`));
+        const clientSnapshot = await getDocs(clientQuery);
+        setClients(clientSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+        const itemQuery = query(collection(db, `items/${auth.currentUser.uid}/userItems`));
+        const itemSnapshot = await getDocs(itemQuery);
+        setStockItems(itemSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, []);
 
     useEffect(() => {
-        const fetchInitialData = async () => {
-            if (!auth.currentUser) return;
-            // Fetch clients
-            const clientQuery = query(collection(db, `clients/${auth.currentUser.uid}/userClients`));
-            const clientSnapshot = await getDocs(clientQuery);
-            setClients(clientSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-
-            // Fetch stock items
-            const itemQuery = query(collection(db, `items/${auth.currentUser.uid}/userItems`));
-            const itemSnapshot = await getDocs(itemQuery);
-            setStockItems(itemSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        };
         fetchInitialData();
 
         if (documentToEdit) {
-            // Logic for converting a proforma to an invoice
-            setDocType('invoice');
+            // This flag is passed from the ProformasPage 'Convert to Invoice' button
+            if (documentToEdit.isConversion) {
+                setMode('convert');
+                setPageTitle('Convert to Invoice');
+                setDocType('invoice');
+            } else {
+                setMode('edit');
+                setPageTitle(`Edit ${documentToEdit.type}`);
+                setDocType(documentToEdit.type);
+            }
+            // Populate form for both editing and converting
             setSelectedClient(documentToEdit.client.id);
             setLineItems(documentToEdit.items);
             setLaborPrice(documentToEdit.laborPrice || 0);
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
-            setDocumentNumber(`INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
+            setDocumentNumber(documentToEdit.documentNumber);
         } else {
-            setDocumentNumber(`PI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
+            setMode('create');
+            setPageTitle('Create New Document');
+            setDocType('proforma'); // Default to proforma for new docs
+            // Get a new proforma number for creation
+            getNextDocNumber(auth.currentUser.uid, 'proforma').then(setDocumentNumber);
         }
-    }, [documentToEdit]);
+    }, [documentToEdit, fetchInitialData]);
 
     const handleAddItemToList = () => {
         if (!selectedStockItem) return;
         const item = stockItems.find(i => i.id === selectedStockItem);
         if (item) {
-            setLineItems([...lineItems, {
-                ...item,
-                itemId: item.id,
-                qty: 1,
-                unitPrice: item.sellingPrice
-            }]);
+            setLineItems([...lineItems, { ...item, itemId: item.id, qty: 1, unitPrice: item.sellingPrice }]);
             setSelectedStockItem('');
         }
     };
@@ -60,15 +92,14 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const handleLineItemChange = (index, field, value) => {
         const updatedItems = [...lineItems];
         const numValue = parseFloat(value);
-        if (!isNaN(numValue)) {
+        if (!isNaN(numValue) || value === '') {
             updatedItems[index][field] = numValue;
             setLineItems(updatedItems);
         }
     };
 
     const handleRemoveLineItem = (index) => {
-        const updatedItems = lineItems.filter((_, i) => i !== index);
-        setLineItems(updatedItems);
+        setLineItems(lineItems.filter((_, i) => i !== index));
     };
 
     const calculateSubtotal = () => {
@@ -81,8 +112,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const total = subtotal + vatAmount;
 
     const handleSaveDocument = async () => {
-        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0) ) {
-            // Using a custom modal instead of alert
+        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0)) {
             const modal = document.getElementById('error-modal');
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.add('hidden'), 3000);
@@ -91,10 +121,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         if (!auth.currentUser) return;
 
         const clientData = clients.find(c => c.id === selectedClient);
-
         const documentData = {
-            type: docType,
-            documentNumber,
             client: clientData,
             date: new Date(),
             items: lineItems,
@@ -103,12 +130,24 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             vatApplied,
             subtotal,
             vatAmount,
-            total
+            total,
         };
 
         try {
-            await addDoc(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), documentData);
-            navigateTo('dashboard');
+            if (mode === 'edit') {
+                const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentToEdit.id);
+                await updateDoc(docRef, { ...documentData, type: docType, documentNumber });
+                navigateTo(docType === 'invoice' ? 'invoices' : 'proformas');
+            } else if (mode === 'convert') {
+                const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentToEdit.id);
+                const newInvoiceNumber = await getNextDocNumber(auth.currentUser.uid, 'invoice');
+                await updateDoc(docRef, { ...documentData, type: 'invoice', documentNumber: newInvoiceNumber });
+                navigateTo('invoices');
+            } else { // create
+                const newDocNumber = await getNextDocNumber(auth.currentUser.uid, docType);
+                await addDoc(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), { ...documentData, type: docType, documentNumber: newDocNumber });
+                navigateTo(docType === 'invoice' ? 'invoices' : 'proformas');
+            }
         } catch (error) {
             console.error("Error saving document: ", error);
         }
@@ -116,40 +155,30 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
 
     return (
         <div>
-            <style>
-                {`
-                @media print {
-                    .no-print {
-                        display: none;
-                    }
-                    .buying-price-col {
-                        display: none;
-                    }
-                }
-                `}
-            </style>
-            {/* Error Modal */}
+            <style>{`@media print {.no-print {display: none;}.buying-price-col {display: none;}}`}</style>
             <div id="error-modal" className="hidden fixed top-5 right-5 bg-red-500 text-white py-2 px-4 rounded-lg shadow-lg z-50 no-print">
                 Please select a client and add at least one item or labor charge.
             </div>
 
-            <h1 className="text-3xl font-bold text-gray-800 mb-6 no-print">{documentToEdit ? 'Create Invoice from Proforma' : 'Create New Document'}</h1>
+            <h1 className="text-3xl font-bold text-gray-800 mb-6 no-print">{pageTitle}</h1>
             <div className="bg-white p-8 rounded-lg shadow-lg">
-                {/* Header */}
                 <div className="flex justify-between items-start mb-8 no-print">
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800 uppercase">{docType}</h2>
                         <p className="text-gray-500">{documentNumber}</p>
                     </div>
-                    <div className="flex space-x-4">
-                        <div className="flex items-center">
-                            <label htmlFor="vat" className="mr-2 font-medium text-gray-700">Apply VAT (11%)</label>
-                            <input type="checkbox" id="vat" checked={vatApplied} onChange={(e) => setVatApplied(e.target.checked)} className="h-5 w-5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
-                        </div>
+                    <div>
+                         {mode === 'create' && (
+                            <select value={docType} onChange={(e) => setDocType(e.target.value)} className="mr-4 p-2 border border-gray-300 rounded-md">
+                                <option value="proforma">Proforma</option>
+                                <option value="invoice">Invoice</option>
+                            </select>
+                        )}
+                        <label htmlFor="vat" className="mr-2 font-medium text-gray-700">Apply VAT (11%)</label>
+                        <input type="checkbox" id="vat" checked={vatApplied} onChange={(e) => setVatApplied(e.target.checked)} className="h-5 w-5 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
                     </div>
                 </div>
 
-                {/* Client Selection */}
                 <div className="mb-8 no-print">
                     <label className="block text-sm font-medium text-gray-700 mb-2">Select Client</label>
                     <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
@@ -158,19 +187,17 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     </select>
                 </div>
 
-                {/* Add Items */}
                 <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
                     <div className="flex items-center space-x-2">
                         <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
                             <option value="">-- Select an item --</option>
-                            {stockItems.map(i => <option key={i.id} value={i.id}>{i.partNumber} - {i.brand} ({i.specs})</option>)}
+                            {stockItems.map(i => <option key={i.id} value={i.id}>{i.name} ({i.partNumber})</option>)}
                         </select>
-                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200">Add</button>
+                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Add</button>
                     </div>
                 </div>
 
-                {/* Line Items Table */}
                 <div className="overflow-x-auto mb-8">
                     <table className="min-w-full">
                         <thead className="bg-gray-100">
@@ -189,13 +216,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                                 <tr key={index} className="border-b">
                                     <td className="py-2 px-4">{item.partNumber}</td>
                                     <td className="py-2 px-4">{item.brand} - {item.specs}</td>
-                                    <td className="py-2 px-4">
-                                        <input type="number" value={item.qty} onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} className="w-20 p-1 border rounded-md" />
-                                    </td>
-                                    <td className="py-2 px-4">
-                                        <input type="number" value={item.unitPrice} onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} className="w-24 p-1 border rounded-md" />
-                                    </td>
-                                    <td className="py-2 px-4 text-gray-400 buying-price-col">${item.buyingPrice.toFixed(2)}</td>
+                                    <td className="py-2 px-4"><input type="number" value={item.qty} onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} className="w-20 p-1 border rounded-md" /></td>
+                                    <td className="py-2 px-4"><input type="number" value={item.unitPrice} onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} className="w-24 p-1 border rounded-md" /></td>
+                                    <td className="py-2 px-4 text-gray-400 buying-price-col">${(item.buyingPrice || 0).toFixed(2)}</td>
                                     <td className="py-2 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
                                     <td className="py-2 px-4 text-center">
                                         <button onClick={() => handleRemoveLineItem(index)} className="text-red-500 hover:text-red-700">
@@ -208,7 +231,6 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     </table>
                 </div>
 
-                {/* Notes, Labor, and Totals */}
                 <div className="flex flex-col md:flex-row justify-between">
                     <div className="w-full md:w-1/2">
                         <label className="block text-sm font-medium text-gray-700 mb-2">Notes / Description</label>
@@ -236,10 +258,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     </div>
                 </div>
 
-                {/* Actions */}
                 <div className="mt-10 flex justify-end space-x-4 no-print">
-                    <button onClick={() => navigateTo('dashboard')} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200">Cancel</button>
-                    <button onClick={handleSaveDocument} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200">Save {docType}</button>
+                    <button onClick={() => navigateTo(docType === 'invoice' ? 'invoices' : 'proformas')} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg">Cancel</button>
+                    <button onClick={handleSaveDocument} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg">Save {docType}</button>
                 </div>
             </div>
         </div>
