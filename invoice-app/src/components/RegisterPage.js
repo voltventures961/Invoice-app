@@ -13,8 +13,21 @@ const RegisterPage = ({ setPage }) => {
         try {
             await createUserWithEmailAndPassword(auth, email, password);
         } catch (err) {
-            setError('Failed to create an account. The email might already be in use.');
-            console.error("Registration Error:", err);
+            console.error("Registration Error:", err.code, err.message);
+            switch (err.code) {
+                case 'auth/email-already-in-use':
+                    setError('This email address is already in use.');
+                    break;
+                case 'auth/invalid-email':
+                    setError('Please enter a valid email address.');
+                    break;
+                case 'auth/weak-password':
+                    setError('The password is too weak. Please use at least 6 characters.');
+                    break;
+                default:
+                    setError('Failed to create an account. Please try again later.');
+                    break;
+            }
         }
     };
 
