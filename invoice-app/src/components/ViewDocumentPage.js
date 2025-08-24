@@ -1,16 +1,38 @@
-import React, { useRef, useEffect } from 'react';
-import { COMPANY_INFO } from '../config';
+import React, { useRef, useEffect, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase/config';
 
 const ViewDocumentPage = ({ documentToView, navigateTo }) => {
     const printRef = useRef();
+    const [companyInfo, setCompanyInfo] = useState(null);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        const fetchCompanyInfo = async () => {
+            if (auth.currentUser) {
+                const settingsRef = doc(db, 'settings', auth.currentUser.uid);
+                try {
+                    const docSnap = await getDoc(settingsRef);
+                    if (docSnap.exists()) {
+                        setCompanyInfo(docSnap.data());
+                    } else {
+                        console.log("No such settings document!");
+                        // Set default or handle error
+                    }
+                } catch (error) {
+                    console.error("Error fetching company settings:", error);
+                }
+            }
+            setLoading(false);
+        };
+
+        fetchCompanyInfo();
+
         if (documentToView) {
             const originalTitle = document.title;
             const { type, documentNumber, client } = documentToView;
             document.title = `${type}-${documentNumber}-${client.name}`;
 
-            // Cleanup function to reset title
             return () => {
                 document.title = originalTitle;
             };
@@ -25,11 +47,12 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
         navigateTo('newDocument', documentToView);
     };
 
-    if (!documentToView) {
-        return <p>No document selected.</p>;
+    if (loading || !documentToView || !companyInfo) {
+        return <p>Loading document...</p>;
     }
 
     const { type, documentNumber, client, date, items, laborPrice, manDaysCost, notes, vatApplied, subtotal, vatAmount, total } = documentToView;
+    const { showLaborAndManDays } = companyInfo.features || { showLaborAndManDays: true };
 
     return (
         <div>
@@ -78,7 +101,11 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                 {/* --- Header --- */}
                 <header className="flex justify-between items-center pb-8 border-b-2 border-gray-200">
                     <div>
-                        {COMPANY_INFO.logo}
+                        {companyInfo.logoUrl ? (
+                            <img src={companyInfo.logoUrl} alt={`${companyInfo.name} logo`} className="h-16 w-auto" />
+                        ) : (
+                            <h2 className="text-2xl font-bold">{companyInfo.name}</h2>
+                        )}
                     </div>
                     <div className="text-right">
                         <h1 className="text-4xl font-bold uppercase text-gray-800">{type}</h1>
@@ -97,10 +124,10 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                     </div>
                     <div className="text-right">
                         <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">From</h3>
-                        <p className="font-bold text-gray-800">{COMPANY_INFO.name}</p>
-                        <p className="text-gray-600">{COMPANY_INFO.address}</p>
-                        <p className="text-gray-600">{COMPANY_INFO.phone}</p>
-                        {vatApplied && <p className="text-gray-600">VAT #: {COMPANY_INFO.vatNumber}</p>}
+                        <p className="font-bold text-gray-800">{companyInfo.name}</p>
+                        <p className="text-gray-600">{companyInfo.address}</p>
+                        <p className="text-gray-600">{companyInfo.phone}</p>
+                        {vatApplied && companyInfo.vatNumber && <p className="text-gray-600">VAT #: {companyInfo.vatNumber}</p>}
                         <p className="mt-4"><span className="font-semibold text-gray-500">Date:</span> {date.toDate().toLocaleDateString()}</p>
                     </div>
                 </section>
@@ -112,7 +139,6 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                     <p className="text-gray-700 bg-gray-50 p-3 rounded-md">{notes}</p>
                 </section>
                 )}
-
 
                 {/* --- Items Table --- */}
                 <section className="my-8">
@@ -136,7 +162,7 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                                     <td className="py-3 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
                                 </tr>
                             ))}
-                            {laborPrice > 0 && (
+                            {showLaborAndManDays && laborPrice > 0 && (
                                 <tr className="border-b">
                                     <td className="py-3 px-4 font-semibold">SERVICE-01</td>
                                     <td className="py-3 px-4">Labor</td>
@@ -145,7 +171,7 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                                     <td className="py-3 px-4 text-right font-medium">${parseFloat(laborPrice).toFixed(2)}</td>
                                 </tr>
                             )}
-                            {manDaysCost > 0 && (
+                            {showLaborAndManDays && manDaysCost > 0 && (
                                 <tr className="border-b">
                                     <td className="py-3 px-4 font-semibold">MAN-DAYS-01</td>
                                     <td className="py-3 px-4">Man-days Cost</td>
@@ -181,7 +207,7 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                 {/* --- Footer --- */}
                 <footer className="pt-8 mt-8 border-t-2 border-gray-200 text-center text-gray-500 text-sm">
                     <p>Thank you for your business!</p>
-                    <p>{COMPANY_INFO.name} | {COMPANY_INFO.address} | {COMPANY_INFO.phone}</p>
+                    <p>{companyInfo.name} | {companyInfo.address} | {companyInfo.phone}</p>
                 </footer>
             </div>
         </div>
