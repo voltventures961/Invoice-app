@@ -29,7 +29,7 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
         return <p>No document selected.</p>;
     }
 
-    const { type, documentNumber, client, date, items, laborPrice, notes, vatApplied, subtotal, vatAmount, total } = documentToView;
+    const { type, documentNumber, client, date, items, laborPrice, manDaysCost, notes, vatApplied, subtotal, vatAmount, total } = documentToView;
 
     return (
         <div>
@@ -143,6 +143,15 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                                     <td className="py-3 px-4 text-center">1</td>
                                     <td className="py-3 px-4 text-right">${parseFloat(laborPrice).toFixed(2)}</td>
                                     <td className="py-3 px-4 text-right font-medium">${parseFloat(laborPrice).toFixed(2)}</td>
+                                </tr>
+                            )}
+                            {manDaysCost > 0 && (
+                                <tr className="border-b">
+                                    <td className="py-3 px-4 font-semibold">MAN-DAYS-01</td>
+                                    <td className="py-3 px-4">Man-days Cost</td>
+                                    <td className="py-3 px-4 text-center">1</td>
+                                    <td className="py-3 px-4 text-right">${parseFloat(manDaysCost).toFixed(2)}</td>
+                                    <td className="py-3 px-4 text-right font-medium">${parseFloat(manDaysCost).toFixed(2)}</td>
                                 </tr>
                             )}
                         </tbody>
