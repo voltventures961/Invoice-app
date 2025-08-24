@@ -1,38 +1,67 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, getDocs, orderBy, limit, startAfter } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, orderBy, limit, startAfter, updateDoc, doc } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 
 const ProformasPage = ({ navigateTo }) => {
     const [proformas, setProformas] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [showDeletedProformas, setShowDeletedProformas] = useState(false);
     const [historyInvoices, setHistoryInvoices] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [lastVisible, setLastVisible] = useState(null);
     const [hasMore, setHasMore] = useState(true);
     const [historyFilter, setHistoryFilter] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const fetchProformas = async (loadMore = false) => {
+        if (!auth.currentUser) return;
+        setLoading(true);
+
+        let q = query(
+            collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
+            where('type', '==', 'proforma'),
+            orderBy('date', 'desc'),
+            limit(20)
+        );
+
+        if (showDeletedProformas) {
+            q = query(q, where('deleted', '==', true));
+        } else {
+            q = query(q, where('deleted', '!=', true));
+        }
+
+        if (loadMore && lastVisible) {
+            q = query(q, startAfter(lastVisible));
+        }
+
+        try {
+            const documentSnapshots = await getDocs(q);
+            const newProformas = documentSnapshots.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            const newLastVisible = documentSnapshots.docs[documentSnapshots.docs.length - 1];
+            setLastVisible(newLastVisible);
+
+            setProformas(prev => loadMore ? [...prev, ...newProformas] : newProformas);
+            setHasMore(newProformas.length === 20);
+        } catch (error) {
+            console.error("Error fetching proformas: ", error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
-        if (!auth.currentUser) return;
-        const q = query(
-            collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
-            where('type', '==', 'proforma')
-        );
-        const unsubscribe = onSnapshot(q, (querySnapshot) => {
-            const docs = [];
-            querySnapshot.forEach((doc) => {
-                docs.push({ id: doc.id, ...doc.data() });
-            });
-            docs.sort((a, b) => b.date.toDate() - a.date.toDate());
-            setProformas(docs);
-            setLoading(false);
-        }, (error) => {
-            console.error("Error fetching proformas: ", error);
-            setLoading(false);
-        });
+        fetchProformas();
+    }, [showDeletedProformas]);
 
-        return () => unsubscribe();
-    }, []);
+    const handleDeleteProforma = async (proformaId) => {
+        if (!auth.currentUser) return;
+        const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, proformaId);
+        await updateDoc(docRef, {
+            deleted: true
+        });
+    };
 
     const fetchHistoryInvoices = async (loadMore = false) => {
         if (!auth.currentUser) return;
@@ -96,18 +125,48 @@ const ProformasPage = ({ navigateTo }) => {
         );
     });
 
+    const handleRestoreProforma = async (proformaId) => {
+        if (!auth.currentUser) return;
+        const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, proformaId);
+        await updateDoc(docRef, {
+            deleted: false
+        });
+    };
+
+    const filteredProformas = proformas.filter(proforma => {
+        const query = searchQuery.toLowerCase();
+        return (
+            proforma.documentNumber.toLowerCase().includes(query) ||
+            proforma.client.name.toLowerCase().includes(query)
+        );
+    });
+
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-3xl font-bold text-gray-800">Proformas</h1>
-                <button onClick={handleOpenHistoryModal} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md">
-                    View Invoice History
-                </button>
+                <h1 className="text-3xl font-bold text-gray-800">{showDeletedProformas ? 'Deleted Proformas' : 'Proformas'}</h1>
+                <div>
+                    <button onClick={() => { setProformas([]); fetchProformas(); setShowDeletedProformas(!showDeletedProformas); }} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md mr-4">
+                        {showDeletedProformas ? 'View Active Proformas' : 'View Deleted Proformas'}
+                    </button>
+                    <button onClick={handleOpenHistoryModal} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md">
+                        View Invoice History
+                    </button>
+                </div>
             </div>
             <div className="bg-white p-6 rounded-lg shadow-lg">
+                <div className="mb-4">
+                    <input
+                        type="text"
+                        placeholder="Search by proforma # or client name..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        className="w-full px-4 py-2 border rounded-lg"
+                    />
+                </div>
                 <div className="overflow-x-auto">
-                    {loading ? <p>Loading proformas...</p> :
-                     proformas.length === 0 ? <p className="text-gray-500">No proformas found.</p> :
+                    {loading && proformas.length === 0 ? <p>Loading proformas...</p> :
+                     filteredProformas.length === 0 ? <p className="text-gray-500">{showDeletedProformas ? 'No deleted proformas found.' : 'No proformas found.'}</p> :
                     <table className="min-w-full bg-white">
                         <thead className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
                             <tr>
@@ -119,24 +178,40 @@ const ProformasPage = ({ navigateTo }) => {
                             </tr>
                         </thead>
                         <tbody className="text-gray-600 text-sm font-light">
-                            {proformas.map(doc => (
+                            {filteredProformas.map(doc => (
                                 <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
                                     <td className="py-3 px-6 text-left">{doc.documentNumber}</td>
                                     <td className="py-3 px-6 text-left">{doc.client.name}</td>
                                     <td className="py-3 px-6 text-center">{doc.date.toDate().toLocaleDateString()}</td>
                                     <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
                                     <td className="py-3 px-6 text-center">
+                                    {showDeletedProformas ? (
+                                        <button onClick={() => handleRestoreProforma(doc.id)} className="text-blue-600 hover:text-blue-800 font-medium py-1 px-3 rounded-lg text-sm">Restore</button>
+                                    ) : (
                                         <div className="flex item-center justify-center">
                                             <button onClick={() => navigateTo('viewDocument', doc)} className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-3 rounded-lg text-sm">View</button>
                                             <button onClick={() => navigateTo('newDocument', doc)} className="text-gray-600 hover:text-purple-600 font-medium py-1 px-3 rounded-lg text-sm">Edit</button>
+                                            <button onClick={() => handleDeleteProforma(doc.id)} className="text-red-600 hover:text-red-800 font-medium py-1 px-3 rounded-lg text-sm">Delete</button>
                                             <button onClick={() => handleConvertToInvoice(doc)} className="text-green-600 hover:text-green-800 font-medium py-1 px-3 rounded-lg text-sm">Convert to Invoice</button>
                                         </div>
+                                    )}
                                     </td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                     }
+                    {hasMore && (
+                        <div className="mt-6">
+                            <button
+                                onClick={() => fetchProformas(true)}
+                                disabled={loading}
+                                className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded disabled:bg-blue-300"
+                            >
+                                {loading ? 'Loading...' : 'Show More'}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 

@@ -35,9 +35,13 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
     const clientDropdownRef = useRef(null);
     const [stockItems, setStockItems] = useState([]);
+    const [itemSearch, setItemSearch] = useState('');
+    const [isItemDropdownVisible, setIsItemDropdownVisible] = useState(false);
+    const itemDropdownRef = useRef(null);
     const [selectedStockItem, setSelectedStockItem] = useState('');
     const [lineItems, setLineItems] = useState([]);
     const [laborPrice, setLaborPrice] = useState(0);
+    const [manDaysCost, setManDaysCost] = useState(0);
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
@@ -72,6 +76,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             setClientSearch(documentToEdit.client.name);
             setLineItems(documentToEdit.items);
             setLaborPrice(documentToEdit.laborPrice || 0);
+            setManDaysCost(documentToEdit.manDaysCost || 0);
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
             setDocumentNumber(documentToEdit.documentNumber);
@@ -88,6 +93,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target)) {
                 setIsClientDropdownVisible(false);
             }
+            if (itemDropdownRef.current && !itemDropdownRef.current.contains(event.target)) {
+                setIsItemDropdownVisible(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
@@ -95,12 +103,11 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         };
     }, []);
 
-    const handleAddItemToList = () => {
-        if (!selectedStockItem) return;
-        const item = stockItems.find(i => i.id === selectedStockItem);
+    const handleAddItemToList = (item) => {
         if (item) {
             setLineItems([...lineItems, { ...item, itemId: item.id, qty: 1, unitPrice: item.sellingPrice }]);
-            setSelectedStockItem('');
+            setItemSearch('');
+            setIsItemDropdownVisible(false);
         }
     };
 
@@ -119,7 +126,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
 
     const calculateSubtotal = () => {
         const itemsTotal = lineItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
-        return itemsTotal + parseFloat(laborPrice || 0);
+        const labor = parseFloat(laborPrice || 0);
+        const manDays = parseFloat(manDaysCost || 0);
+        return itemsTotal + labor + manDays;
     };
 
     const subtotal = calculateSubtotal();
@@ -127,7 +136,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const total = subtotal + vatAmount;
 
     const handleSaveDocument = async () => {
-        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0)) {
+        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0 && parseFloat(manDaysCost || 0) === 0)) {
             const modal = document.getElementById('error-modal');
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.add('hidden'), 3000);
@@ -141,6 +150,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             date: new Date(),
             items: lineItems,
             laborPrice: parseFloat(laborPrice || 0),
+            manDaysCost: parseFloat(manDaysCost || 0),
             notes,
             vatApplied,
             subtotal,
@@ -229,15 +239,41 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     )}
                 </div>
 
-                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
+                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print" ref={itemDropdownRef}>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
-                    <div className="flex items-center space-x-2">
-                        <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
-                            <option value="">-- Select an item --</option>
-                            {stockItems.map(i => <option key={i.id} value={i.id}>{`${i.name}${i.brand ? ` - ${i.brand}` : ''}${i.category ? ` - ${i.category}` : ''}`}</option>)}
-                        </select>
-                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Add</button>
-                    </div>
+                    <input
+                        type="text"
+                        value={itemSearch}
+                        onChange={e => {
+                            setItemSearch(e.target.value);
+                            setIsItemDropdownVisible(true);
+                        }}
+                        onFocus={() => setIsItemDropdownVisible(true)}
+                        placeholder="Search for an item by name, brand, or category"
+                        className="w-full p-2 border border-gray-300 rounded-md"
+                    />
+                    {isItemDropdownVisible && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                            {stockItems
+                                .filter(item => {
+                                    const searchTerm = itemSearch.toLowerCase();
+                                    return (
+                                        item.name.toLowerCase().includes(searchTerm) ||
+                                        (item.brand && item.brand.toLowerCase().includes(searchTerm)) ||
+                                        (item.category && item.category.toLowerCase().includes(searchTerm))
+                                    );
+                                })
+                                .map(item => (
+                                    <div
+                                        key={item.id}
+                                        onClick={() => handleAddItemToList(item)}
+                                        className="p-2 hover:bg-gray-100 cursor-pointer"
+                                    >
+                                        {`${item.name}${item.brand ? ` - ${item.brand}` : ''}${item.category ? ` - ${item.category}` : ''}`}
+                                    </div>
+                                ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="overflow-x-auto mb-8">
@@ -283,6 +319,12 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                             <span className="font-medium text-gray-600">Labor Price:</span>
                             <input type="number" value={laborPrice} onChange={(e) => setLaborPrice(e.target.value)} className="w-24 p-1 border rounded-md text-right" />
                         </div>
+                        {docType === 'invoice' && (
+                            <div className="flex justify-between py-1">
+                                <span className="font-medium text-gray-600">Man-days Cost:</span>
+                                <input type="number" value={manDaysCost} onChange={(e) => setManDaysCost(e.target.value)} className="w-24 p-1 border rounded-md text-right" />
+                            </div>
+                        )}
                         <div className="flex justify-between py-1 mt-2">
                             <span className="font-medium text-gray-700">Subtotal:</span>
                             <span className="font-medium text-gray-800">${subtotal.toFixed(2)}</span>
