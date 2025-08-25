@@ -1,12 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot, where, Timestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 
-const StatCard = ({ title, value, detail, color }) => (
-    <div className={`p-6 rounded-lg shadow-lg text-white ${color}`}>
-        <h3 className="text-lg font-semibold">{title}</h3>
-        <p className="text-3xl font-bold mt-2">{value}</p>
-        <p className="text-sm mt-1">{detail}</p>
+const StatCard = ({ title, value, detail, color, isExpanded, onToggle }) => (
+    <div className={`rounded-lg shadow-lg text-white ${color} transition-all duration-300 ${isExpanded ? 'p-6' : 'p-4'}`}>
+        <div className="flex justify-between items-start">
+            <div className="flex-1">
+                <h3 className="text-lg font-semibold">{title}</h3>
+                {isExpanded && (
+                    <>
+                        <p className="text-3xl font-bold mt-2">{value}</p>
+                        <p className="text-sm mt-1">{detail}</p>
+                    </>
+                )}
+                {!isExpanded && (
+                    <p className="text-xl font-bold mt-1">{value}</p>
+                )}
+            </div>
+            <button 
+                onClick={onToggle}
+                className="ml-2 text-white hover:text-gray-200 transition-colors"
+            >
+                <svg 
+                    className={`w-5 h-5 transform transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+            </button>
+        </div>
     </div>
 );
 
@@ -19,14 +43,60 @@ const Dashboard = ({ navigateTo }) => {
     });
     const [recentDocuments, setRecentDocuments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth'
+    const [expandedCards, setExpandedCards] = useState({
+        proformas: false,
+        invoices: false,
+        revenue: false
+    });
+
+    const toggleCard = (cardName) => {
+        setExpandedCards(prev => ({
+            ...prev,
+            [cardName]: !prev[cardName]
+        }));
+    };
+
+    const getDateRange = () => {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        
+        switch (filterPeriod) {
+            case 'thisMonth':
+                return {
+                    start: new Date(year, month, 1),
+                    end: new Date(year, month + 1, 0, 23, 59, 59)
+                };
+            case 'ytd':
+                return {
+                    start: new Date(year, 0, 1),
+                    end: now
+                };
+            case 'allTime':
+            default:
+                return {
+                    start: new Date(2020, 0, 1),
+                    end: now
+                };
+        }
+    };
 
     useEffect(() => {
         if (!auth.currentUser) return;
+        const dateRange = getDateRange();
+        
         const q = query(collection(db, `documents/${auth.currentUser.uid}/userDocuments`));
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
             const docs = [];
             querySnapshot.forEach((doc) => {
-                docs.push({ id: doc.id, ...doc.data() });
+                const data = doc.data();
+                const docDate = data.date.toDate();
+                
+                // Filter by date range
+                if (docDate >= dateRange.start && docDate <= dateRange.end) {
+                    docs.push({ id: doc.id, ...data });
+                }
             });
 
             const proformas = docs.filter(d => d.type === 'proforma');
@@ -52,7 +122,7 @@ const Dashboard = ({ navigateTo }) => {
         });
 
         return () => unsubscribe();
-    }, []);
+    }, [filterPeriod]);
 
     if (loading) {
         return <div className="flex justify-center items-center h-screen"><div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-blue-500"></div></div>;
@@ -60,32 +130,49 @@ const Dashboard = ({ navigateTo }) => {
 
     return (
         <div>
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                 <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-                <button onClick={() => navigateTo('newDocument')} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
-                    + Create New Document
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <select 
+                        value={filterPeriod} 
+                        onChange={(e) => setFilterPeriod(e.target.value)}
+                        className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                        <option value="thisMonth">This Month</option>
+                        <option value="ytd">Year to Date</option>
+                        <option value="allTime">All Time</option>
+                    </select>
+                    <button onClick={() => navigateTo('newDocument')} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
+                        + Create New Document
+                    </button>
+                </div>
             </div>
 
             {/* Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
                 <StatCard
                     title="Potentials (Proformas)"
-                    value={`$${stats.proformasTotal.toFixed(2)}`}
+                    value={`${stats.proformasTotal.toFixed(2)}`}
                     detail={`${stats.proformasCount} active proformas`}
-                    color="bg-yellow-500"
+                    color="bg-gradient-to-r from-yellow-400 to-yellow-600"
+                    isExpanded={expandedCards.proformas}
+                    onToggle={() => toggleCard('proformas')}
                 />
                 <StatCard
                     title="Finalized (Invoices)"
-                    value={`$${stats.invoicesTotal.toFixed(2)}`}
+                    value={`${stats.invoicesTotal.toFixed(2)}`}
                     detail={`${stats.invoicesCount} invoices`}
-                    color="bg-green-500"
+                    color="bg-gradient-to-r from-green-400 to-green-600"
+                    isExpanded={expandedCards.invoices}
+                    onToggle={() => toggleCard('invoices')}
                 />
                  <StatCard
                     title="Total Revenue"
-                    value={`$${stats.invoicesTotal.toFixed(2)}`}
+                    value={`${stats.invoicesTotal.toFixed(2)}`}
                     detail="From all finalized invoices"
-                    color="bg-blue-500"
+                    color="bg-gradient-to-r from-blue-400 to-blue-600"
+                    isExpanded={expandedCards.revenue}
+                    onToggle={() => toggleCard('revenue')}
                 />
             </div>
 

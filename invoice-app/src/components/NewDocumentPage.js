@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { collection, query, getDocs, addDoc, updateDoc, doc, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 
@@ -25,8 +25,6 @@ const getNextDocNumber = async (userId, type) => {
     }
 };
 
-import { useRef } from 'react';
-
 const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [docType, setDocType] = useState('proforma');
     const [clients, setClients] = useState([]);
@@ -34,10 +32,15 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [clientSearch, setClientSearch] = useState('');
     const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
     const clientDropdownRef = useRef(null);
+    const itemDropdownRef = useRef(null);
     const [stockItems, setStockItems] = useState([]);
     const [selectedStockItem, setSelectedStockItem] = useState('');
+    const [itemSearch, setItemSearch] = useState('');
+    const [isItemDropdownVisible, setIsItemDropdownVisible] = useState(false);
     const [lineItems, setLineItems] = useState([]);
     const [laborPrice, setLaborPrice] = useState(0);
+    const [mandays, setMandays] = useState({ days: 0, people: 0, costPerDay: 0 });
+    const [showMandays, setShowMandays] = useState(false);
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
@@ -75,6 +78,12 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
             setDocumentNumber(documentToEdit.documentNumber);
+            
+            // Load mandays if exists
+            if (documentToEdit.mandays) {
+                setMandays(documentToEdit.mandays);
+                setShowMandays(true);
+            }
         } else {
             setMode('create');
             setPageTitle('Create New Document');
@@ -88,6 +97,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target)) {
                 setIsClientDropdownVisible(false);
             }
+            if (itemDropdownRef.current && !itemDropdownRef.current.contains(event.target)) {
+                setIsItemDropdownVisible(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
@@ -95,12 +107,12 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         };
     }, []);
 
-    const handleAddItemToList = () => {
-        if (!selectedStockItem) return;
-        const item = stockItems.find(i => i.id === selectedStockItem);
+    const handleAddItemToList = (item) => {
         if (item) {
             setLineItems([...lineItems, { ...item, itemId: item.id, qty: 1, unitPrice: item.sellingPrice }]);
+            setItemSearch('');
             setSelectedStockItem('');
+            setIsItemDropdownVisible(false);
         }
     };
 
@@ -117,9 +129,14 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         setLineItems(lineItems.filter((_, i) => i !== index));
     };
 
+    const calculateMandalsCost = () => {
+        return mandays.days * mandays.people * mandays.costPerDay;
+    };
+
     const calculateSubtotal = () => {
         const itemsTotal = lineItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
-        return itemsTotal + parseFloat(laborPrice || 0);
+        const mandaysCost = showMandays ? calculateMandalsCost() : 0;
+        return itemsTotal + parseFloat(laborPrice || 0) + mandaysCost;
     };
 
     const subtotal = calculateSubtotal();
@@ -127,7 +144,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const total = subtotal + vatAmount;
 
     const handleSaveDocument = async () => {
-        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0)) {
+        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0 && (!showMandays || calculateMandalsCost() === 0))) {
             const modal = document.getElementById('error-modal');
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.add('hidden'), 3000);
@@ -141,6 +158,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             date: new Date(),
             items: lineItems,
             laborPrice: parseFloat(laborPrice || 0),
+            mandays: showMandays ? mandays : null,
             notes,
             vatApplied,
             subtotal,
@@ -168,11 +186,24 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         }
     };
 
+    // Filter items based on search
+    const filteredItems = stockItems.filter(item => {
+        const search = itemSearch.toLowerCase();
+        return (
+            item.name?.toLowerCase().includes(search) ||
+            item.brand?.toLowerCase().includes(search) ||
+            item.category?.toLowerCase().includes(search) ||
+            item.partNumber?.toLowerCase().includes(search) ||
+            item.specs?.toLowerCase().includes(search) ||
+            item.sellingPrice?.toString().includes(search)
+        );
+    });
+
     return (
         <div>
             <style>{`@media print {.no-print {display: none;}.buying-price-col {display: none;}}`}</style>
             <div id="error-modal" className="hidden fixed top-5 right-5 bg-red-500 text-white py-2 px-4 rounded-lg shadow-lg z-50 no-print">
-                Please select a client and add at least one item or labor charge.
+                Please select a client and add at least one item, labor charge, or mandays cost.
             </div>
 
             <h1 className="text-3xl font-bold text-gray-800 mb-6 no-print">{pageTitle}</h1>
@@ -183,7 +214,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                         <p className="text-gray-500">{documentNumber}</p>
                     </div>
                     <div>
-                         {mode === 'create' && (
+                        {mode === 'create' && (
                             <select value={docType} onChange={(e) => setDocType(e.target.value)} className="mr-4 p-2 border border-gray-300 rounded-md">
                                 <option value="proforma">Proforma</option>
                                 <option value="invoice">Invoice</option>
@@ -229,14 +260,40 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     )}
                 </div>
 
-                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print">
+                <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print" ref={itemDropdownRef}>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
-                    <div className="flex items-center space-x-2">
-                        <select value={selectedStockItem} onChange={(e) => setSelectedStockItem(e.target.value)} className="flex-grow p-2 border border-gray-300 rounded-md">
-                            <option value="">-- Select an item --</option>
-                            {stockItems.map(i => <option key={i.id} value={i.id}>{`${i.name}${i.brand ? ` - ${i.brand}` : ''}${i.category ? ` - ${i.category}` : ''}`}</option>)}
-                        </select>
-                        <button onClick={handleAddItemToList} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">Add</button>
+                    <div className="relative">
+                        <input
+                            type="text"
+                            value={itemSearch}
+                            onChange={(e) => {
+                                setItemSearch(e.target.value);
+                                setIsItemDropdownVisible(true);
+                            }}
+                            onFocus={() => setIsItemDropdownVisible(true)}
+                            placeholder="Search by name, brand, category, part number, specs, or price..."
+                            className="w-full p-2 border border-gray-300 rounded-md"
+                        />
+                        {isItemDropdownVisible && filteredItems.length > 0 && (
+                            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                                {filteredItems.map(item => (
+                                    <div
+                                        key={item.id}
+                                        onClick={() => handleAddItemToList(item)}
+                                        className="p-3 hover:bg-gray-100 cursor-pointer border-b"
+                                    >
+                                        <div className="font-medium">{item.name}</div>
+                                        <div className="text-sm text-gray-600">
+                                            {item.brand && `Brand: ${item.brand} | `}
+                                            {item.category && `Category: ${item.category} | `}
+                                            {item.partNumber && `Part #: ${item.partNumber} | `}
+                                            Price: ${item.sellingPrice}
+                                        </div>
+                                        {item.specs && <div className="text-xs text-gray-500 mt-1">{item.specs}</div>}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -250,7 +307,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                                 <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Unit Price</th>
                                 <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600 buying-price-col">Buying Price</th>
                                 <th className="py-2 px-4 text-right text-sm font-semibold text-gray-600">Total</th>
-                                <th className="py-2 px-4 text-center text-sm font-semibold text-gray-600"></th>
+                                <th className="py-2 px-4 text-center text-sm font-semibold text-gray-600 no-print"></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -258,19 +315,92 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                                 <tr key={index} className="border-b">
                                     <td className="py-2 px-4">{item.partNumber}</td>
                                     <td className="py-2 px-4">{item.brand} - {item.specs}</td>
-                                    <td className="py-2 px-4"><input type="number" value={item.qty} onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} className="w-20 p-1 border rounded-md" /></td>
-                                    <td className="py-2 px-4"><input type="number" value={item.unitPrice} onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} className="w-24 p-1 border rounded-md" /></td>
+                                    <td className="py-2 px-4">
+                                        <input 
+                                            type="number" 
+                                            value={item.qty} 
+                                            onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} 
+                                            className="w-20 p-1 border rounded-md" 
+                                        />
+                                    </td>
+                                    <td className="py-2 px-4">
+                                        <input 
+                                            type="number" 
+                                            value={item.unitPrice} 
+                                            onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} 
+                                            className="w-24 p-1 border rounded-md" 
+                                        />
+                                    </td>
                                     <td className="py-2 px-4 text-gray-400 buying-price-col">${(item.buyingPrice || 0).toFixed(2)}</td>
                                     <td className="py-2 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
-                                    <td className="py-2 px-4 text-center">
+                                    <td className="py-2 px-4 text-center no-print">
                                         <button onClick={() => handleRemoveLineItem(index)} className="text-red-500 hover:text-red-700">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" />
+                                            </svg>
                                         </button>
                                     </td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
+                </div>
+
+                {/* Mandays Section */}
+                <div className="mb-8 p-4 border rounded-lg bg-blue-50 no-print">
+                    <div className="flex items-center justify-between mb-4">
+                        <label className="text-sm font-medium text-gray-700">Add Mandays Cost (Optional)</label>
+                        <button
+                            type="button"
+                            onClick={() => setShowMandays(!showMandays)}
+                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                        >
+                            {showMandays ? 'Remove Mandays' : '+ Add Mandays'}
+                        </button>
+                    </div>
+                    {showMandays && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Number of Days</label>
+                                <input
+                                    type="number"
+                                    value={mandays.days}
+                                    onChange={(e) => setMandays({...mandays, days: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 5"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Number of People</label>
+                                <input
+                                    type="number"
+                                    value={mandays.people}
+                                    onChange={(e) => setMandays({...mandays, people: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 3"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Cost per Day per Person</label>
+                                <input
+                                    type="number"
+                                    value={mandays.costPerDay}
+                                    onChange={(e) => setMandays({...mandays, costPerDay: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 100"
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {showMandays && calculateMandalsCost() > 0 && (
+                        <div className="mt-3 p-2 bg-white rounded">
+                            <span className="text-sm text-gray-600">Total Mandays Cost: </span>
+                            <span className="font-bold text-blue-600">${calculateMandalsCost().toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-2">
+                                ({mandays.days} days × {mandays.people} people × ${mandays.costPerDay}/day)
+                            </span>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex flex-col md:flex-row justify-between">
@@ -283,6 +413,12 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                             <span className="font-medium text-gray-600">Labor Price:</span>
                             <input type="number" value={laborPrice} onChange={(e) => setLaborPrice(e.target.value)} className="w-24 p-1 border rounded-md text-right" />
                         </div>
+                        {showMandays && calculateMandalsCost() > 0 && (
+                            <div className="flex justify-between py-1">
+                                <span className="font-medium text-gray-600">Mandays Cost:</span>
+                                <span className="font-medium text-gray-800">${calculateMandalsCost().toFixed(2)}</span>
+                            </div>
+                        )}
                         <div className="flex justify-between py-1 mt-2">
                             <span className="font-medium text-gray-700">Subtotal:</span>
                             <span className="font-medium text-gray-800">${subtotal.toFixed(2)}</span>
