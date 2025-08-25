@@ -130,19 +130,19 @@ const SettingsPage = () => {
                         <h2 className="text-xl font-semibold text-gray-800 border-b pb-2">Business Details</h2>
                         <div>
                             <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">Company Name</label>
-                            <input type="text" id="companyName" value={companyName} onChange={(e) => setCompanyName(e.target.value)} className="mt-1 block w-full input-class" />
+                            <input type="text" id="companyName" value={companyName} onChange={(e) => setCompanyName(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                         </div>
                         <div>
                             <label htmlFor="address" className="block text-sm font-medium text-gray-700">Address</label>
-                            <input type="text" id="address" value={address} onChange={(e) => setAddress(e.target.value)} className="mt-1 block w-full input-class" />
+                            <input type="text" id="address" value={address} onChange={(e) => setAddress(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                         </div>
                         <div>
                             <label htmlFor="phone" className="block text-sm font-medium text-gray-700">Phone</label>
-                            <input type="text" id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 block w-full input-class" />
+                            <input type="text" id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                         </div>
                         <div>
                             <label htmlFor="vatNumber" className="block text-sm font-medium text-gray-700">VAT Number</label>
-                            <input type="text" id="vatNumber" value={vatNumber} onChange={(e) => setVatNumber(e.target.value)} className="mt-1 block w-full input-class" />
+                            <input type="text" id="vatNumber" value={vatNumber} onChange={(e) => setVatNumber(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" />
                         </div>
 
                         <h2 className="text-xl font-semibold text-gray-800 border-b pb-2 pt-4">Company Logo</h2>

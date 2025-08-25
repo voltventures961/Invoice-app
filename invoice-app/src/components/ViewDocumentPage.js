@@ -16,8 +16,15 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                     if (docSnap.exists()) {
                         setCompanyInfo(docSnap.data());
                     } else {
-                        console.log("No such settings document!");
-                        // Set default or handle error
+                        console.log("No settings document, using defaults.");
+                        setCompanyInfo({
+                            name: "Your Company Name",
+                            address: "123 Business Rd, Suite 100",
+                            phone: "555-555-5555",
+                            vatNumber: "",
+                            logoUrl: "",
+                            features: { showLaborAndManDays: true },
+                        });
                     }
                 } catch (error) {
                     console.error("Error fetching company settings:", error);
