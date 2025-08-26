@@ -265,6 +265,59 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     )}
                 </div>
 
+                <div className="overflow-x-auto mb-8">
+                    <table className="min-w-full">
+                        <thead className="bg-gray-100">
+                            <tr>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Item/Part #</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Description</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Qty</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Unit Price</th>
+                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600 buying-price-col">Buying Price</th>
+                                <th className="py-2 px-4 text-right text-sm font-semibold text-gray-600">Total</th>
+                                <th className="py-2 px-4 text-center text-sm font-semibold text-gray-600 no-print"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {lineItems.map((item, index) => (
+                                <tr key={index} className="border-b">
+                                    <td className="py-2 px-4">{item.partNumber}</td>
+                                    <td className="py-2 px-4">
+                                        <div className="font-medium">{item.name}</div>
+                                        <div className="text-sm text-gray-600">{item.brand && `${item.brand} - `}{item.specs}</div>
+                                    </td>
+                                    <td className="py-2 px-4">
+                                        <input 
+                                            type="number" 
+                                            value={item.qty} 
+                                            onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} 
+                                            className="w-20 p-1 border rounded-md" 
+                                        />
+                                    </td>
+                                    <td className="py-2 px-4">
+                                        <input 
+                                            type="number" 
+                                            value={item.unitPrice} 
+                                            onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} 
+                                            className="w-24 p-1 border rounded-md" 
+                                        />
+                                    </td>
+                                    <td className="py-2 px-4 text-gray-400 buying-price-col">${(item.buyingPrice || 0).toFixed(2)}</td>
+                                    <td className="py-2 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
+                                    <td className="py-2 px-4 text-center no-print">
+                                        <button onClick={() => handleRemoveLineItem(index)} className="text-red-500 hover:text-red-700">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" />
+                                            </svg>
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Add Item form - moved after the items list */}
                 <div className="mb-8 p-4 border rounded-lg bg-gray-50 no-print" ref={itemDropdownRef}>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add Item from Stock</label>
                     <div className="relative">
@@ -300,55 +353,6 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                             </div>
                         )}
                     </div>
-                </div>
-
-                <div className="overflow-x-auto mb-8">
-                    <table className="min-w-full">
-                        <thead className="bg-gray-100">
-                            <tr>
-                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Item/Part #</th>
-                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Description</th>
-                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Qty</th>
-                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600">Unit Price</th>
-                                <th className="py-2 px-4 text-left text-sm font-semibold text-gray-600 buying-price-col">Buying Price</th>
-                                <th className="py-2 px-4 text-right text-sm font-semibold text-gray-600">Total</th>
-                                <th className="py-2 px-4 text-center text-sm font-semibold text-gray-600 no-print"></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {lineItems.map((item, index) => (
-                                <tr key={index} className="border-b">
-                                    <td className="py-2 px-4">{item.partNumber}</td>
-                                    <td className="py-2 px-4">{item.brand} - {item.specs}</td>
-                                    <td className="py-2 px-4">
-                                        <input 
-                                            type="number" 
-                                            value={item.qty} 
-                                            onChange={(e) => handleLineItemChange(index, 'qty', e.target.value)} 
-                                            className="w-20 p-1 border rounded-md" 
-                                        />
-                                    </td>
-                                    <td className="py-2 px-4">
-                                        <input 
-                                            type="number" 
-                                            value={item.unitPrice} 
-                                            onChange={(e) => handleLineItemChange(index, 'unitPrice', e.target.value)} 
-                                            className="w-24 p-1 border rounded-md" 
-                                        />
-                                    </td>
-                                    <td className="py-2 px-4 text-gray-400 buying-price-col">${(item.buyingPrice || 0).toFixed(2)}</td>
-                                    <td className="py-2 px-4 text-right font-medium">${(item.qty * item.unitPrice).toFixed(2)}</td>
-                                    <td className="py-2 px-4 text-center no-print">
-                                        <button onClick={() => handleRemoveLineItem(index)} className="text-red-500 hover:text-red-700">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" />
-                                            </svg>
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
                 </div>
 
                 {/* Mandays Section */}
