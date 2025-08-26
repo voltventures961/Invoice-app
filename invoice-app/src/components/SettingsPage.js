@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../firebase/config';
 
 const SettingsPage = () => {
@@ -34,7 +34,23 @@ const SettingsPage = () => {
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
-            setImageFile(e.target.files[0]);
+            const file = e.target.files[0];
+            
+            // Check file size (5MB limit)
+            if (file.size > 5 * 1024 * 1024) {
+                setFeedback({ type: 'error', message: 'File size must be less than 5MB' });
+                return;
+            }
+            
+            // Check file type
+            const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif'];
+            if (!allowedTypes.includes(file.type)) {
+                setFeedback({ type: 'error', message: 'Please upload a valid image file (PNG, JPG, or GIF)' });
+                return;
+            }
+            
+            setImageFile(file);
+            setFeedback({ type: '', message: '' });
         }
     };
 
@@ -46,30 +62,26 @@ const SettingsPage = () => {
         let newLogoUrl = logoUrl;
 
         if (imageFile) {
-            const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${imageFile.name}`);
-            const uploadTask = uploadBytesResumable(storageRef, imageFile);
-
             try {
-                await new Promise((resolve, reject) => {
-                    uploadTask.on('state_changed',
-                        (snapshot) => {
-                            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                            setUploadProgress(progress);
-                        },
-                        (error) => {
-                            console.error("Upload failed:", error);
-                            reject(error);
-                        },
-                        async () => {
-                            newLogoUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                            setLogoUrl(newLogoUrl);
-                            resolve();
-                        }
-                    );
-                });
+                // Create a unique filename to avoid conflicts
+                const timestamp = Date.now();
+                const fileName = `${timestamp}_${imageFile.name}`;
+                const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
+                
+                // Upload the file
+                setUploadProgress(50);
+                const snapshot = await uploadBytes(storageRef, imageFile);
+                
+                // Get the download URL
+                setUploadProgress(75);
+                newLogoUrl = await getDownloadURL(snapshot.ref);
+                setLogoUrl(newLogoUrl);
+                setUploadProgress(100);
             } catch (error) {
-                setFeedback({ type: 'error', message: 'Logo upload failed. Please try again.' });
+                console.error("Upload failed:", error);
+                setFeedback({ type: 'error', message: `Logo upload failed: ${error.message}` });
                 setLoading(false);
+                setUploadProgress(0);
                 return;
             }
         }
@@ -111,11 +123,19 @@ const SettingsPage = () => {
                         <label className="block text-sm font-medium text-gray-700">Company Logo</label>
                         <div className="mt-2 flex items-center space-x-4">
                             {logoUrl && <img src={logoUrl} alt="Company Logo" className="h-16 w-16 rounded-full object-cover" />}
-                            <input type="file" onChange={handleImageChange} accept="image/*" className="text-sm" />
+                            <div>
+                                <input 
+                                    type="file" 
+                                    onChange={handleImageChange} 
+                                    accept="image/png,image/jpeg,image/jpg,image/gif" 
+                                    className="text-sm"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Max size: 5MB. Formats: PNG, JPG, GIF</p>
+                            </div>
                         </div>
-                        {imageFile && uploadProgress > 0 && (
+                        {uploadProgress > 0 && uploadProgress < 100 && (
                             <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                                <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${uploadProgress}%` }}></div>
+                                <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
                             </div>
                         )}
                     </div>

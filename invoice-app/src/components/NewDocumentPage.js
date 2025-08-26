@@ -45,7 +45,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
     const [pageTitle, setPageTitle] = useState('Create New Document');
-    const [mode, setMode] = useState('create'); // 'create', 'edit', 'convert'
+    const [mode, setMode] = useState('create'); // 'create', 'edit'
 
     const fetchInitialData = useCallback(async () => {
         if (!auth.currentUser) return;
@@ -62,18 +62,12 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         fetchInitialData();
 
         if (documentToEdit) {
-            if (documentToEdit.isConversion) {
-                setMode('convert');
-                setPageTitle('Convert to Invoice');
-                setDocType('invoice');
-            } else {
-                setMode('edit');
-                setPageTitle(`Edit ${documentToEdit.type}`);
-                setDocType(documentToEdit.type);
-            }
+            setMode('edit');
+            setPageTitle(`Edit ${documentToEdit.type === 'proforma' ? 'Proforma' : 'Invoice'}`);
+            setDocType(documentToEdit.type);
             setSelectedClient(documentToEdit.client.id);
             setClientSearch(documentToEdit.client.name);
-            setLineItems(documentToEdit.items);
+            setLineItems(documentToEdit.items || []);
             setLaborPrice(documentToEdit.laborPrice || 0);
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
@@ -171,11 +165,6 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                 const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentToEdit.id);
                 await updateDoc(docRef, { ...documentData, type: docType, documentNumber });
                 navigateTo(docType === 'invoice' ? 'invoices' : 'proformas');
-            } else if (mode === 'convert') {
-                const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentToEdit.id);
-                const newInvoiceNumber = await getNextDocNumber(auth.currentUser.uid, 'invoice');
-                await updateDoc(docRef, { ...documentData, type: 'invoice', documentNumber: newInvoiceNumber });
-                navigateTo('invoices');
             } else { // create
                 const newDocNumber = await getNextDocNumber(auth.currentUser.uid, docType);
                 await addDoc(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), { ...documentData, type: docType, documentNumber: newDocNumber });
@@ -437,8 +426,24 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                 </div>
 
                 <div className="mt-10 flex justify-end space-x-4 no-print">
-                    <button onClick={() => navigateTo(docType === 'invoice' ? 'invoices' : 'proformas')} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg">Cancel</button>
-                    <button onClick={handleSaveDocument} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg">Save {docType}</button>
+                    <button 
+                        onClick={() => {
+                            if (documentToEdit) {
+                                navigateTo(documentToEdit.type === 'invoice' ? 'invoices' : 'proformas');
+                            } else {
+                                navigateTo('dashboard');
+                            }
+                        }} 
+                        className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={handleSaveDocument} 
+                        className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg transition-colors"
+                    >
+                        {mode === 'edit' ? 'Update' : 'Save'} {docType === 'proforma' ? 'Proforma' : 'Invoice'}
+                    </button>
                 </div>
             </div>
         </div>

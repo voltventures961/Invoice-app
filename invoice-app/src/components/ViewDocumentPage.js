@@ -21,9 +21,7 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
         window.print();
     };
 
-    const handleConvertToInvoice = () => {
-        navigateTo('newDocument', documentToView);
-    };
+
 
     if (!documentToView) {
         return <p>No document selected.</p>;
@@ -60,11 +58,6 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
             <div className="no-print flex justify-between items-center mb-6">
                 <h1 className="text-3xl font-bold text-gray-800">View Document</h1>
                 <div className="space-x-3">
-                    {type === 'proforma' && (
-                        <button onClick={handleConvertToInvoice} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
-                            Convert to Invoice
-                        </button>
-                    )}
                     <button onClick={handlePrint} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
                         Print / Save PDF
                     </button>
@@ -91,8 +84,9 @@ const ViewDocumentPage = ({ documentToView, navigateTo }) => {
                     <div>
                         <h3 className="text-sm font-semibold text-gray-500 uppercase mb-2">Billed To</h3>
                         <p className="font-bold text-gray-800">{client.name}</p>
+                        {client.address && <p className="text-gray-600">{client.address}</p>}
                         <p className="text-gray-600">{client.location}</p>
-                        <p className="text-gray-600">{client.phone}</p>
+                        <p className="text-gray-600">{client.phone || client.phoneNumber}</p>
                         {client.vatNumber && <p className="text-gray-600">VAT: {client.vatNumber}</p>}
                     </div>
                     <div className="text-right">

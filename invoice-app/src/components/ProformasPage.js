@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, getDocs, orderBy, limit, startAfter, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, orderBy, limit, startAfter, deleteDoc, doc, updateDoc, addDoc, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 
 const ProformasPage = ({ navigateTo }) => {
@@ -20,46 +20,44 @@ const ProformasPage = ({ navigateTo }) => {
     useEffect(() => {
         if (!auth.currentUser) return;
         
-        // Fetch active proformas
-        const activeQuery = query(
+        // Fetch all proformas first, then filter in memory
+        const proformaQuery = query(
             collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
-            where('type', '==', 'proforma'),
-            where('deleted', '!=', true)
+            where('type', '==', 'proforma')
         );
         
-        // Fetch deleted proformas
-        const deletedQuery = query(
-            collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
-            where('type', '==', 'proforma'),
-            where('deleted', '==', true)
-        );
-        
-        const unsubscribeActive = onSnapshot(activeQuery, (querySnapshot) => {
-            const docs = [];
+        const unsubscribe = onSnapshot(proformaQuery, (querySnapshot) => {
+            const activeDocs = [];
+            const deletedDocs = [];
+            
             querySnapshot.forEach((doc) => {
-                docs.push({ id: doc.id, ...doc.data() });
+                const data = { id: doc.id, ...doc.data() };
+                
+                // Check if it's converted to invoice
+                if (data.converted) {
+                    // Skip converted proformas from active list
+                    return;
+                }
+                
+                if (data.deleted === true || data.cancelled === true) {
+                    deletedDocs.push(data);
+                } else {
+                    activeDocs.push(data);
+                }
             });
-            docs.sort((a, b) => b.date.toDate() - a.date.toDate());
-            setProformas(docs);
+            
+            activeDocs.sort((a, b) => b.date.toDate() - a.date.toDate());
+            deletedDocs.sort((a, b) => (b.deletedAt?.toDate() || new Date()) - (a.deletedAt?.toDate() || new Date()));
+            
+            setProformas(activeDocs);
+            setDeletedProformas(deletedDocs);
             setLoading(false);
         }, (error) => {
             console.error("Error fetching proformas: ", error);
             setLoading(false);
         });
-        
-        const unsubscribeDeleted = onSnapshot(deletedQuery, (querySnapshot) => {
-            const docs = [];
-            querySnapshot.forEach((doc) => {
-                docs.push({ id: doc.id, ...doc.data() });
-            });
-            docs.sort((a, b) => (b.deletedAt?.toDate() || new Date()) - (a.deletedAt?.toDate() || new Date()));
-            setDeletedProformas(docs);
-        });
 
-        return () => {
-            unsubscribeActive();
-            unsubscribeDeleted();
-        };
+        return () => unsubscribe();
     }, []);
 
     const fetchHistoryInvoices = async (loadMore = false) => {
@@ -112,8 +110,54 @@ const ProformasPage = ({ navigateTo }) => {
         fetchHistoryInvoices();
     };
 
-    const handleConvertToInvoice = (proforma) => {
-        navigateTo('newDocument', { ...proforma, isConversion: true });
+    const handleConvertToInvoice = async (proforma) => {
+        if (!auth.currentUser) return;
+        
+        try {
+            // Get next invoice number
+            const year = new Date().getFullYear();
+            const counterRef = doc(db, `counters/${auth.currentUser.uid}/documentCounters`, 'invoiceCounter');
+            const newInvoiceNumber = await runTransaction(db, async (transaction) => {
+                const counterDoc = await transaction.get(counterRef);
+                let newLastId = 1;
+                if (counterDoc.exists()) {
+                    newLastId = counterDoc.data().lastId + 1;
+                }
+                transaction.set(counterRef, { lastId: newLastId }, { merge: true });
+                return `INV-${year}-${String(newLastId).padStart(3, '0')}`;
+            });
+            
+            // Create new invoice document
+            const invoiceData = {
+                ...proforma,
+                type: 'invoice',
+                documentNumber: newInvoiceNumber,
+                proformaNumber: proforma.documentNumber,
+                convertedFrom: proforma.id,
+                date: new Date()
+            };
+            
+            // Remove proforma-specific fields
+            delete invoiceData.id;
+            delete invoiceData.converted;
+            
+            // Add the new invoice
+            await addDoc(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), invoiceData);
+            
+            // Mark original proforma as converted
+            const proformaRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, proforma.id);
+            await updateDoc(proformaRef, {
+                converted: true,
+                convertedAt: new Date(),
+                convertedToInvoiceNumber: newInvoiceNumber
+            });
+            
+            // Navigate to invoices page
+            navigateTo('invoices');
+        } catch (error) {
+            console.error("Error converting proforma to invoice: ", error);
+            alert('Error converting proforma to invoice. Please try again.');
+        }
     };
 
     const handleDeleteProforma = async (proformaId) => {
@@ -185,9 +229,9 @@ const ProformasPage = ({ navigateTo }) => {
                 <div className="flex gap-2">
                     <button 
                         onClick={() => setShowDeletedModal(true)} 
-                        className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg shadow-md"
+                        className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors"
                     >
-                        Deleted ({deletedProformas.length})
+                        Cancelled ({deletedProformas.length})
                     </button>
                     <button 
                         onClick={handleOpenHistoryModal} 
@@ -250,6 +294,7 @@ const ProformasPage = ({ navigateTo }) => {
                                             <button 
                                                 onClick={() => handleConvertToInvoice(doc)} 
                                                 className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                title="Convert to Invoice"
                                             >
                                                 Convert
                                             </button>
@@ -310,8 +355,8 @@ const ProformasPage = ({ navigateTo }) => {
                 <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
                     <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-full flex flex-col">
                         <div className="flex justify-between items-center p-4 border-b">
-                            <h2 className="text-xl font-bold">Deleted Proformas</h2>
-                            <button onClick={() => setShowDeletedModal(false)} className="text-gray-400 hover:text-gray-600">
+                            <h2 className="text-xl font-bold">Cancelled Proformas</h2>
+                            <button onClick={() => setShowDeletedModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
                                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
                                 </svg>

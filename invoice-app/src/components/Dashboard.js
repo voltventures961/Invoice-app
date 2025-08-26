@@ -13,9 +13,6 @@ const StatCard = ({ title, value, detail, color, isExpanded, onToggle }) => (
                         <p className="text-sm mt-1">{detail}</p>
                     </>
                 )}
-                {!isExpanded && (
-                    <p className="text-xl font-bold mt-1">{value}</p>
-                )}
             </div>
             <button 
                 onClick={onToggle}
@@ -45,9 +42,9 @@ const Dashboard = ({ navigateTo }) => {
     const [loading, setLoading] = useState(true);
     const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth'
     const [expandedCards, setExpandedCards] = useState({
-        proformas: false,
-        invoices: false,
-        revenue: false
+        proformas: true,
+        invoices: true,
+        revenue: true
     });
 
     const toggleCard = (cardName) => {
@@ -86,20 +83,24 @@ const Dashboard = ({ navigateTo }) => {
         if (!auth.currentUser) return;
         const dateRange = getDateRange();
         
-        const q = query(collection(db, `documents/${auth.currentUser.uid}/userDocuments`));
+        const q = query(
+            collection(db, `documents/${auth.currentUser.uid}/userDocuments`)
+        );
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
             const docs = [];
             querySnapshot.forEach((doc) => {
                 const data = doc.data();
                 const docDate = data.date.toDate();
                 
-                // Filter by date range
-                if (docDate >= dateRange.start && docDate <= dateRange.end) {
+                // Filter by date range and exclude cancelled/deleted documents
+                if (docDate >= dateRange.start && docDate <= dateRange.end && 
+                    !data.cancelled && !data.deleted) {
                     docs.push({ id: doc.id, ...data });
                 }
             });
 
-            const proformas = docs.filter(d => d.type === 'proforma');
+            // Filter active documents only (not converted proformas)
+            const proformas = docs.filter(d => d.type === 'proforma' && !d.converted);
             const invoices = docs.filter(d => d.type === 'invoice');
 
             const proformasTotal = proformas.reduce((sum, doc) => sum + doc.total, 0);
