@@ -26,14 +26,9 @@ export default function App() {
             setUser(currentUser);
             setLoading(false);
             if (currentUser) {
-                const creationTime = new Date(currentUser.metadata.creationTime).getTime();
-                const lastSignInTime = new Date(currentUser.metadata.lastSignInTime).getTime();
-                // If the user signed in within 2 seconds of creation, they are likely new.
-                if (lastSignInTime - creationTime < 2000) {
-                    setPage('settings');
-                } else {
-                    setPage('dashboard');
-                }
+                // Always default to dashboard regardless of when user was created
+                // User can navigate to settings if they need to
+                setPage('dashboard');
             } else {
                 setPage('login');
             }

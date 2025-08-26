@@ -39,12 +39,14 @@ const Dashboard = ({ navigateTo }) => {
         invoicesTotal: 0,
     });
     const [recentDocuments, setRecentDocuments] = useState([]);
+    const [pendingProformas, setPendingProformas] = useState([]); // For follow-up table
+    const [unpaidInvoices, setUnpaidInvoices] = useState([]); // For follow-up table
     const [loading, setLoading] = useState(true);
     const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth'
     const [expandedCards, setExpandedCards] = useState({
-        proformas: true,
-        invoices: true,
-        revenue: true
+        proformas: false,  // Collapsed by default
+        invoices: false,   // Collapsed by default
+        revenue: false     // Collapsed by default
     });
 
     const toggleCard = (cardName) => {
@@ -113,6 +115,13 @@ const Dashboard = ({ navigateTo }) => {
                 invoicesTotal: invoicesTotal,
             });
 
+            // Set pending proformas for follow-up (all active proformas)
+            setPendingProformas(proformas.slice(0, 5)); // Show top 5
+            
+            // Set unpaid invoices for follow-up (assuming all are unpaid for now)
+            // In a real app, you'd track payment status
+            setUnpaidInvoices(invoices.filter(inv => !inv.paid).slice(0, 5)); // Show top 5 unpaid
+
             docs.sort((a, b) => b.date.toDate() - a.date.toDate());
             setRecentDocuments(docs.slice(0, 5));
 
@@ -175,6 +184,70 @@ const Dashboard = ({ navigateTo }) => {
                     isExpanded={expandedCards.revenue}
                     onToggle={() => toggleCard('revenue')}
                 />
+            </div>
+
+            {/* Follow-Up Summary */}
+            <div className="bg-white p-6 rounded-lg shadow-lg mb-8">
+                <h2 className="text-xl font-semibold text-gray-700 mb-4">Follow-Up Required</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Pending Proformas */}
+                    <div>
+                        <h3 className="text-lg font-medium text-gray-600 mb-2">Pending Proformas</h3>
+                        {pendingProformas.length === 0 ? (
+                            <p className="text-gray-500 text-sm">No pending proformas</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {pendingProformas.map(doc => (
+                                    <div 
+                                        key={doc.id} 
+                                        onClick={() => navigateTo('viewDocument', doc)}
+                                        className="p-2 border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center"
+                                    >
+                                        <div>
+                                            <span className="font-medium text-sm">{doc.client.name}</span>
+                                            <span className="text-xs text-gray-500 ml-2">{doc.documentNumber}</span>
+                                        </div>
+                                        <div className="text-right">
+                                            <span className="text-sm font-semibold">${doc.total.toFixed(2)}</span>
+                                            <div className="text-xs text-gray-500">
+                                                {Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24))} days old
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* Unpaid Invoices */}
+                    <div>
+                        <h3 className="text-lg font-medium text-gray-600 mb-2">Unpaid Invoices</h3>
+                        {unpaidInvoices.length === 0 ? (
+                            <p className="text-gray-500 text-sm">No unpaid invoices</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {unpaidInvoices.map(doc => (
+                                    <div 
+                                        key={doc.id} 
+                                        onClick={() => navigateTo('viewDocument', doc)}
+                                        className="p-2 border rounded hover:bg-gray-50 cursor-pointer flex justify-between items-center"
+                                    >
+                                        <div>
+                                            <span className="font-medium text-sm">{doc.client.name}</span>
+                                            <span className="text-xs text-gray-500 ml-2">{doc.documentNumber}</span>
+                                        </div>
+                                        <div className="text-right">
+                                            <span className="text-sm font-semibold">${doc.total.toFixed(2)}</span>
+                                            <div className="text-xs text-gray-500">
+                                                {Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24))} days old
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Recent Activity */}

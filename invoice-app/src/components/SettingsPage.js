@@ -5,6 +5,9 @@ import { auth, db, storage } from '../firebase/config';
 
 const SettingsPage = () => {
     const [companyName, setCompanyName] = useState('');
+    const [companyAddress, setCompanyAddress] = useState('');
+    const [companyPhone, setCompanyPhone] = useState('');
+    const [companyVatNumber, setCompanyVatNumber] = useState('');
     const [logoUrl, setLogoUrl] = useState('');
     const [imageFile, setImageFile] = useState(null);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -20,6 +23,9 @@ const SettingsPage = () => {
                 if (docSnap.exists()) {
                     const settings = docSnap.data();
                     setCompanyName(settings.companyName || '');
+                    setCompanyAddress(settings.companyAddress || '');
+                    setCompanyPhone(settings.companyPhone || '');
+                    setCompanyVatNumber(settings.companyVatNumber || '');
                     setLogoUrl(settings.logoUrl || '');
                 }
             } catch (error) {
@@ -88,7 +94,13 @@ const SettingsPage = () => {
 
         const settingsRef = doc(db, 'settings', auth.currentUser.uid);
         try {
-            await setDoc(settingsRef, { companyName, logoUrl: newLogoUrl }, { merge: true });
+            await setDoc(settingsRef, { 
+                companyName, 
+                companyAddress,
+                companyPhone,
+                companyVatNumber,
+                logoUrl: newLogoUrl 
+            }, { merge: true });
             setFeedback({ type: 'success', message: 'Settings saved successfully!' });
         } catch (error) {
             console.error("Error saving settings:", error);
@@ -116,6 +128,39 @@ const SettingsPage = () => {
                             id="companyName"
                             value={companyName}
                             onChange={(e) => setCompanyName(e.target.value)}
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="companyAddress" className="block text-sm font-medium text-gray-700">Company Address</label>
+                        <input
+                            type="text"
+                            id="companyAddress"
+                            value={companyAddress}
+                            onChange={(e) => setCompanyAddress(e.target.value)}
+                            placeholder="123 Business St, City, State 12345"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="companyPhone" className="block text-sm font-medium text-gray-700">Phone Number</label>
+                        <input
+                            type="text"
+                            id="companyPhone"
+                            value={companyPhone}
+                            onChange={(e) => setCompanyPhone(e.target.value)}
+                            placeholder="+1 (555) 123-4567"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="companyVatNumber" className="block text-sm font-medium text-gray-700">VAT Number</label>
+                        <input
+                            type="text"
+                            id="companyVatNumber"
+                            value={companyVatNumber}
+                            onChange={(e) => setCompanyVatNumber(e.target.value)}
+                            placeholder="123456789"
                             className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                         />
                     </div>

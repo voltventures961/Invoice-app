@@ -44,6 +44,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
+    const [documentDate, setDocumentDate] = useState(new Date().toISOString().split('T')[0]); // Add editable date
     const [pageTitle, setPageTitle] = useState('Create New Document');
     const [mode, setMode] = useState('create'); // 'create', 'edit'
 
@@ -72,7 +73,11 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             setNotes(documentToEdit.notes || '');
             setVatApplied(documentToEdit.vatApplied || false);
             setDocumentNumber(documentToEdit.documentNumber);
-            
+            // Load date if exists
+            if (documentToEdit.date) {
+                const existingDate = documentToEdit.date.toDate();
+                setDocumentDate(existingDate.toISOString().split('T')[0]);
+            }
             // Load mandays if exists
             if (documentToEdit.mandays) {
                 setMandays(documentToEdit.mandays);
@@ -149,7 +154,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         const clientData = clients.find(c => c.id === selectedClient);
         const documentData = {
             client: clientData,
-            date: new Date(),
+            date: new Date(documentDate + 'T00:00:00'), // Use selected date
             items: lineItems,
             laborPrice: parseFloat(laborPrice || 0),
             mandays: showMandays ? mandays : null,
@@ -175,7 +180,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         }
     };
 
-    // Filter items based on search
+    // Filter items based on search including custom fields
     const filteredItems = stockItems.filter(item => {
         const search = itemSearch.toLowerCase();
         return (
@@ -184,7 +189,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             item.category?.toLowerCase().includes(search) ||
             item.partNumber?.toLowerCase().includes(search) ||
             item.specs?.toLowerCase().includes(search) ||
-            item.sellingPrice?.toString().includes(search)
+            item.sellingPrice?.toString().includes(search) ||
+            item.customField1?.toLowerCase().includes(search) ||
+            item.customField2?.toLowerCase().includes(search)
         );
     });
 
@@ -201,6 +208,15 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800 uppercase">{docType}</h2>
                         <p className="text-gray-500">{documentNumber}</p>
+                        <div className="mt-2">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                            <input
+                                type="date"
+                                value={documentDate}
+                                onChange={(e) => setDocumentDate(e.target.value)}
+                                className="px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                        </div>
                     </div>
                     <div>
                         {mode === 'create' && (

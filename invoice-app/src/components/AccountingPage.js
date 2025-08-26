@@ -9,6 +9,11 @@ const AccountingPage = () => {
     const [customStartDate, setCustomStartDate] = useState('');
     const [customEndDate, setCustomEndDate] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('all'); // 'all', 'labor', 'items'
+    const [clientFilter, setClientFilter] = useState('all'); // 'all' or client id
+    const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'paid', 'unpaid', 'overdue'
+    const [sortColumn, setSortColumn] = useState('date'); // Column to sort by
+    const [sortDirection, setSortDirection] = useState('desc'); // 'asc' or 'desc'
+    const [uniqueClients, setUniqueClients] = useState([]);
     const [stats, setStats] = useState({
         totalRevenue: 0,
         totalCost: 0,
@@ -68,8 +73,9 @@ const AccountingPage = () => {
                 const data = doc.data();
                 const docDate = data.date.toDate();
                 
-                // Filter by date range
-                if (docDate >= dateRange.start && docDate <= dateRange.end) {
+                // Filter by date range and exclude cancelled invoices
+                if (docDate >= dateRange.start && docDate <= dateRange.end && 
+                    !data.cancelled && !data.deleted) {
                     docs.push({ id: doc.id, ...data });
                 }
             });
@@ -110,6 +116,11 @@ const AccountingPage = () => {
                 invoiceCount: docs.length,
                 averageInvoiceValue
             });
+
+            // Get unique clients for filter dropdown
+            const clientsSet = new Set(docs.map(doc => JSON.stringify({ id: doc.client.id, name: doc.client.name })));
+            const clientsList = Array.from(clientsSet).map(str => JSON.parse(str));
+            setUniqueClients(clientsList);
 
             // Sort documents by date
             docs.sort((a, b) => b.date.toDate() - a.date.toDate());
@@ -157,13 +168,75 @@ const AccountingPage = () => {
         window.URL.revokeObjectURL(url);
     };
 
-    const getFilteredDocuments = () => {
-        if (categoryFilter === 'labor') {
-            return documents.filter(doc => doc.laborPrice && doc.laborPrice > 0);
-        } else if (categoryFilter === 'items') {
-            return documents.filter(doc => doc.items && doc.items.length > 0);
+    const handleSort = (column) => {
+        if (sortColumn === column) {
+            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortColumn(column);
+            setSortDirection('asc');
         }
-        return documents;
+    };
+
+    const getFilteredDocuments = () => {
+        let filtered = documents;
+        
+        // Apply category filter
+        if (categoryFilter === 'labor') {
+            filtered = filtered.filter(doc => doc.laborPrice && doc.laborPrice > 0);
+        } else if (categoryFilter === 'items') {
+            filtered = filtered.filter(doc => doc.items && doc.items.length > 0);
+        }
+        
+        // Apply client filter
+        if (clientFilter !== 'all') {
+            filtered = filtered.filter(doc => doc.client.id === clientFilter);
+        }
+        
+        // Apply status filter (assuming paid field exists)
+        if (statusFilter === 'paid') {
+            filtered = filtered.filter(doc => doc.paid === true);
+        } else if (statusFilter === 'unpaid') {
+            filtered = filtered.filter(doc => !doc.paid);
+        } else if (statusFilter === 'overdue') {
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            filtered = filtered.filter(doc => !doc.paid && doc.date.toDate() < thirtyDaysAgo);
+        }
+        
+        // Apply sorting
+        filtered.sort((a, b) => {
+            let aVal, bVal;
+            
+            switch (sortColumn) {
+                case 'date':
+                    aVal = a.date.toDate();
+                    bVal = b.date.toDate();
+                    break;
+                case 'number':
+                    aVal = a.documentNumber;
+                    bVal = b.documentNumber;
+                    break;
+                case 'client':
+                    aVal = a.client.name;
+                    bVal = b.client.name;
+                    break;
+                case 'total':
+                    aVal = a.total;
+                    bVal = b.total;
+                    break;
+                default:
+                    aVal = a.date.toDate();
+                    bVal = b.date.toDate();
+            }
+            
+            if (sortDirection === 'asc') {
+                return aVal > bVal ? 1 : -1;
+            } else {
+                return aVal < bVal ? 1 : -1;
+            }
+        });
+        
+        return filtered;
     };
 
     if (loading) {
@@ -188,7 +261,8 @@ const AccountingPage = () => {
 
             {/* Filter Controls */}
             <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <h3 className="text-lg font-medium text-gray-700 mb-3">Filters</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Period</label>
                         <select 
@@ -236,6 +310,34 @@ const AccountingPage = () => {
                             <option value="all">All Categories</option>
                             <option value="labor">Labor Only</option>
                             <option value="items">Items Only</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
+                        <select 
+                            value={clientFilter} 
+                            onChange={(e) => setClientFilter(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md"
+                        >
+                            <option value="all">All Clients</option>
+                            {uniqueClients.map(client => (
+                                <option key={client.id} value={client.id}>{client.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                        <select 
+                            value={statusFilter} 
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md"
+                        >
+                            <option value="all">All Status</option>
+                            <option value="paid">Paid</option>
+                            <option value="unpaid">Unpaid</option>
+                            <option value="overdue">Overdue (30+ days)</option>
                         </select>
                     </div>
                 </div>
@@ -336,15 +438,36 @@ const AccountingPage = () => {
                     ) : (
                         <table className="min-w-full bg-white">
                             <thead className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
-                                <tr>
-                                    <th className="py-3 px-6 text-left">Date</th>
-                                    <th className="py-3 px-6 text-left">Invoice #</th>
-                                    <th className="py-3 px-6 text-left">Client</th>
-                                    <th className="py-3 px-6 text-right">Items</th>
-                                    <th className="py-3 px-6 text-right">Labor</th>
-                                    <th className="py-3 px-6 text-right">VAT</th>
-                                    <th className="py-3 px-6 text-right">Total</th>
-                                    <th className="py-3 px-6 text-right">Profit</th>
+                            <tr>
+                            <th 
+                                onClick={() => handleSort('date')}
+                                className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                >
+                                    Date {sortColumn === 'date' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                </th>
+                                <th 
+                                    onClick={() => handleSort('number')}
+                                    className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                >
+                                    Invoice # {sortColumn === 'number' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                </th>
+                                <th 
+                                    onClick={() => handleSort('client')}
+                                    className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                >
+                                    Client {sortColumn === 'client' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                </th>
+                                <th className="py-3 px-6 text-right">Items</th>
+                                <th className="py-3 px-6 text-right">Labor</th>
+                                <th className="py-3 px-6 text-right">VAT</th>
+                                <th 
+                                    onClick={() => handleSort('total')}
+                                    className="py-3 px-6 text-right cursor-pointer hover:bg-gray-300"
+                                >
+                                    Total {sortColumn === 'total' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                </th>
+                                <th className="py-3 px-6 text-right">Profit</th>
+                                <th className="py-3 px-6 text-center">Status</th>
                                 </tr>
                             </thead>
                             <tbody className="text-gray-600 text-sm font-light">
@@ -352,6 +475,8 @@ const AccountingPage = () => {
                                     const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
                                     const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
                                     const profit = doc.total - cost - (doc.vatAmount || 0);
+                                    const daysSinceIssued = Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24));
+                                    const isOverdue = !doc.paid && daysSinceIssued > 30;
                                     
                                     return (
                                         <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
@@ -364,6 +489,15 @@ const AccountingPage = () => {
                                             <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
                                             <td className={`py-3 px-6 text-right font-semibold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                 ${profit.toFixed(2)}
+                                            </td>
+                                            <td className="py-3 px-6 text-center">
+                                                {doc.paid ? (
+                                                    <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Paid</span>
+                                                ) : isOverdue ? (
+                                                    <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">Overdue</span>
+                                                ) : (
+                                                    <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">Unpaid</span>
+                                                )}
                                             </td>
                                         </tr>
                                     );

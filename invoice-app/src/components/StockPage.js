@@ -29,9 +29,23 @@ const StockPage = () => {
     const [items, setItems] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [showForm, setShowForm] = useState(false);
-    const [newItem, setNewItem] = useState({ name: '', category: '', subCategory: '', brand: '', partNumber: '', specs: '', type: '', color: '', buyingPrice: 0, sellingPrice: 0 });
+    const [newItem, setNewItem] = useState({ 
+        name: '', 
+        category: '', 
+        subCategory: '', 
+        brand: '', 
+        partNumber: '', 
+        specs: '', 
+        type: '', 
+        color: '', 
+        buyingPrice: 0, 
+        sellingPrice: 0,
+        customField1: '',  // New custom field
+        customField2: ''   // New custom field
+    });
     const [editingItem, setEditingItem] = useState(null); // To hold the item being edited
     const fileInputRef = useRef(null);
+    const [importLoading, setImportLoading] = useState(false); // Loading state for CSV import
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -100,7 +114,20 @@ const StockPage = () => {
     };
 
     const resetForm = () => {
-        setNewItem({ name: '', category: '', subCategory: '', brand: '', partNumber: '', specs: '', type: '', color: '', buyingPrice: 0, sellingPrice: 0 });
+        setNewItem({ 
+            name: '', 
+            category: '', 
+            subCategory: '', 
+            brand: '', 
+            partNumber: '', 
+            specs: '', 
+            type: '', 
+            color: '', 
+            buyingPrice: 0, 
+            sellingPrice: 0,
+            customField1: '',
+            customField2: ''
+        });
         setEditingItem(null);
         setShowForm(false);
     };
@@ -121,6 +148,8 @@ const StockPage = () => {
     const handleImport = (event) => {
         const file = event.target.files[0];
         if (!file) return;
+        
+        setImportLoading(true); // Show loading indicator
 
         Papa.parse(file, {
             header: true,
@@ -129,13 +158,6 @@ const StockPage = () => {
                 if (!auth.currentUser) return;
                 const batch = writeBatch(db);
                 const itemsCollection = collection(db, `items/${auth.currentUser.uid}/userItems`);
-
-                // This is a simplified import. For a robust solution, we'd need to
-                // get the next ID for each item sequentially, which can be slow.
-                // For this implementation, we'll import without a sequential ID,
-                // or accept that it might be slow if we fetch IDs one by one.
-                // A better but more complex approach would be a cloud function.
-                // Let's do it sequentially for now as it's safer.
 
                 for (const row of results.data) {
                     try {
@@ -146,25 +168,31 @@ const StockPage = () => {
                             itemId: newItemId,
                             buyingPrice: parseFloat(row.buyingPrice) || 0,
                             sellingPrice: parseFloat(row.sellingPrice) || 0,
+                            customField1: row.customField1 || '',
+                            customField2: row.customField2 || ''
                         }
                         batch.set(newItemRef, itemData);
                     } catch(error) {
                         console.error("Error preparing batch for import:", error);
-                        // Maybe show an error to the user
+                        setImportLoading(false);
+                        alert('Import failed. Please check the console for details.');
                         return; // Stop the import process
                     }
                 }
 
                 try {
                     await batch.commit();
+                    setImportLoading(false);
                     alert('Import successful!');
                 } catch (error) {
                     console.error("Error importing data: ", error);
+                    setImportLoading(false);
                     alert('Import failed. Please check the console for details.');
                 }
             },
             error: (error) => {
                 console.error("Error parsing CSV:", error);
+                setImportLoading(false);
                 alert('Failed to parse CSV file.');
             }
         });
@@ -186,10 +214,13 @@ const StockPage = () => {
         { name: 'color', placeholder: 'Color' },
         { name: 'buyingPrice', placeholder: 'Buying Price', type: 'number' },
         { name: 'sellingPrice', placeholder: 'Selling Price', type: 'number' },
+        { name: 'customField1', placeholder: 'Custom Field 1' },
+        { name: 'customField2', placeholder: 'Custom Field 2' }
     ];
 
     const filteredItems = items.filter(item => {
         const searchTermLower = searchTerm.toLowerCase();
+        // Search in all fields including custom fields
         return Object.values(item).some(value =>
             typeof value === 'string' && value.toLowerCase().includes(searchTermLower)
         );
@@ -200,12 +231,27 @@ const StockPage = () => {
             <h1 className="text-3xl font-bold text-gray-800 mb-6">Stock Items</h1>
             <div className="flex justify-end mb-6 space-x-2">
                 <input type="file" ref={fileInputRef} onChange={handleImport} accept=".csv" className="hidden" id="csv-importer" />
-                <button onClick={() => document.getElementById('csv-importer').click()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">Import CSV</button>
+                <button 
+                    onClick={() => document.getElementById('csv-importer').click()} 
+                    disabled={importLoading}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                    {importLoading ? 'Importing...' : 'Import CSV'}
+                </button>
                 <button onClick={handleExport} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">Export CSV</button>
                 <button onClick={() => { setShowForm(!showForm); if (editingItem) resetForm(); } } className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
                     {showForm ? 'Cancel' : '+ Add New Item'}
                 </button>
             </div>
+            
+            {importLoading && (
+                <div className="mb-4 p-4 bg-blue-50 rounded-lg">
+                    <div className="flex items-center">
+                        <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-blue-500 mr-3"></div>
+                        <span className="text-blue-700">Processing CSV file, please wait...</span>
+                    </div>
+                </div>
+            )}
 
             {showForm && (
                 <div className="bg-white p-6 rounded-lg shadow-lg mb-6">
