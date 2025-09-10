@@ -10,6 +10,11 @@ const InvoicesPage = ({ navigateTo }) => {
     const [displayLimit, setDisplayLimit] = useState(20);
     const [showCancelledModal, setShowCancelledModal] = useState(false);
     const [confirmCancel, setConfirmCancel] = useState(null);
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [selectedInvoice, setSelectedInvoice] = useState(null);
+    const [paymentAmount, setPaymentAmount] = useState('');
+    const [paymentNote, setPaymentNote] = useState('');
+    const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -47,25 +52,92 @@ const InvoicesPage = ({ navigateTo }) => {
         return () => unsubscribe();
     }, []);
 
-    // Filter invoices based on search query
-    const filteredInvoices = invoices.filter(doc => {
-        const search = searchQuery.toLowerCase();
-        const dateStr = doc.date.toDate().toLocaleDateString();
+    // Calculate payment status
+    const getPaymentStatus = (invoice) => {
+        const totalPaid = invoice.totalPaid || 0;
+        const total = invoice.total || 0;
         
-        return (
-            doc.documentNumber.toLowerCase().includes(search) ||
-            doc.client.name.toLowerCase().includes(search) ||
-            dateStr.includes(search) ||
-            doc.total.toString().includes(search)
-        );
-    });
+        if (totalPaid >= total) {
+            return { status: 'paid', label: 'Paid', color: 'bg-green-100 text-green-800' };
+        } else if (totalPaid > 0) {
+            return { status: 'partial', label: `Partial ($${totalPaid.toFixed(2)})`, color: 'bg-yellow-100 text-yellow-800' };
+        } else {
+            const daysSinceIssued = Math.floor((new Date() - invoice.date.toDate()) / (1000 * 60 * 60 * 24));
+            if (daysSinceIssued > 30) {
+                return { status: 'overdue', label: 'Overdue', color: 'bg-red-100 text-red-800' };
+            }
+            return { status: 'unpaid', label: 'Unpaid', color: 'bg-gray-100 text-gray-800' };
+        }
+    };
 
-    // Limit displayed invoices
-    const displayedInvoices = filteredInvoices.slice(0, displayLimit);
+    // Handle payment modal
+    const openPaymentModal = (invoice) => {
+        setSelectedInvoice(invoice);
+        const remaining = invoice.total - (invoice.totalPaid || 0);
+        setPaymentAmount(remaining.toFixed(2));
+        setPaymentNote('');
+        setPaymentDate(new Date().toISOString().split('T')[0]);
+        setShowPaymentModal(true);
+    };
 
-    // Calculate statistics
-    const totalAmount = displayedInvoices.reduce((sum, doc) => sum + doc.total, 0);
-    const averageAmount = displayedInvoices.length > 0 ? totalAmount / displayedInvoices.length : 0;
+    // Handle add payment
+    const handleAddPayment = async () => {
+        if (!selectedInvoice || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
+        
+        try {
+            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, selectedInvoice.id);
+            const amount = parseFloat(paymentAmount);
+            const currentPaid = selectedInvoice.totalPaid || 0;
+            const newTotalPaid = Math.min(currentPaid + amount, selectedInvoice.total);
+            
+            const payment = {
+                amount: amount,
+                date: new Date(paymentDate),
+                note: paymentNote,
+                timestamp: new Date()
+            };
+            
+            const payments = selectedInvoice.payments || [];
+            payments.push(payment);
+            
+            await updateDoc(docRef, {
+                payments: payments,
+                totalPaid: newTotalPaid,
+                paid: newTotalPaid >= selectedInvoice.total,
+                lastPaymentDate: new Date(paymentDate)
+            });
+            
+            setShowPaymentModal(false);
+            setSelectedInvoice(null);
+        } catch (error) {
+            console.error("Error adding payment: ", error);
+            alert("Error adding payment. Please try again.");
+        }
+    };
+
+    // Handle cancel payment
+    const handleCancelPayment = async (invoice, paymentIndex) => {
+        if (!window.confirm('Are you sure you want to cancel this payment?')) return;
+        
+        try {
+            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, invoice.id);
+            const payments = [...(invoice.payments || [])];
+            const cancelledPayment = payments[paymentIndex];
+            
+            payments.splice(paymentIndex, 1);
+            
+            const newTotalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+            
+            await updateDoc(docRef, {
+                payments: payments,
+                totalPaid: newTotalPaid,
+                paid: newTotalPaid >= invoice.total
+            });
+        } catch (error) {
+            console.error("Error cancelling payment: ", error);
+            alert("Error cancelling payment. Please try again.");
+        }
+    };
 
     const handleCancelInvoice = async (invoiceId) => {
         if (!auth.currentUser) return;
@@ -111,6 +183,29 @@ const InvoicesPage = ({ navigateTo }) => {
         }
     };
 
+    // Filter invoices based on search query
+    const filteredInvoices = invoices.filter(doc => {
+        const search = searchQuery.toLowerCase();
+        const dateStr = doc.date.toDate().toLocaleDateString();
+        const paymentStatus = getPaymentStatus(doc);
+        
+        return (
+            doc.documentNumber.toLowerCase().includes(search) ||
+            doc.client.name.toLowerCase().includes(search) ||
+            dateStr.includes(search) ||
+            doc.total.toString().includes(search) ||
+            paymentStatus.label.toLowerCase().includes(search)
+        );
+    });
+
+    // Limit displayed invoices
+    const displayedInvoices = filteredInvoices.slice(0, displayLimit);
+
+    // Calculate statistics
+    const totalAmount = displayedInvoices.reduce((sum, doc) => sum + doc.total, 0);
+    const totalPaidAmount = displayedInvoices.reduce((sum, doc) => sum + (doc.totalPaid || 0), 0);
+    const totalUnpaidAmount = totalAmount - totalPaidAmount;
+
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
@@ -132,11 +227,27 @@ const InvoicesPage = ({ navigateTo }) => {
             <div className="mb-6">
                 <input
                     type="text"
-                    placeholder="Search by invoice number, client name, date, or amount..."
+                    placeholder="Search by invoice number, client name, date, amount, or payment status..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+            </div>
+
+            {/* Payment Summary */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="bg-green-50 p-4 rounded-lg">
+                    <p className="text-sm text-green-600">Total Paid</p>
+                    <p className="text-2xl font-bold text-green-800">${totalPaidAmount.toFixed(2)}</p>
+                </div>
+                <div className="bg-red-50 p-4 rounded-lg">
+                    <p className="text-sm text-red-600">Outstanding</p>
+                    <p className="text-2xl font-bold text-red-800">${totalUnpaidAmount.toFixed(2)}</p>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                    <p className="text-sm text-blue-600">Total Invoiced</p>
+                    <p className="text-2xl font-bold text-blue-800">${totalAmount.toFixed(2)}</p>
+                </div>
             </div>
 
             <div className="bg-white p-6 rounded-lg shadow-lg">
@@ -157,41 +268,56 @@ const InvoicesPage = ({ navigateTo }) => {
                                     <th className="py-3 px-6 text-left">Client</th>
                                     <th className="py-3 px-6 text-center">Date</th>
                                     <th className="py-3 px-6 text-right">Total</th>
-                                    <th className="py-3 px-6 text-center">Status</th>
+                                    <th className="py-3 px-6 text-right">Paid</th>
+                                    <th className="py-3 px-6 text-center">Payment Status</th>
                                     <th className="py-3 px-6 text-center">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="text-gray-600 text-sm font-light">
-                                {displayedInvoices.map(doc => (
-                                    <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
-                                        <td className="py-3 px-6 text-left font-medium">{doc.documentNumber}</td>
-                                        <td className="py-3 px-6 text-left">{doc.client.name}</td>
-                                        <td className="py-3 px-6 text-center">{doc.date.toDate().toLocaleDateString()}</td>
-                                        <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
-                                        <td className="py-3 px-6 text-center">
-                                            <span className="bg-green-200 text-green-700 py-1 px-3 rounded-full text-xs font-semibold">
-                                                {doc.convertedFrom ? 'Converted' : 'Finalized'}
-                                            </span>
-                                        </td>
-                                        <td className="py-3 px-6 text-center">
-                                            <div className="flex item-center justify-center gap-1">
-                                                <button 
-                                                    onClick={() => navigateTo('viewDocument', doc)} 
-                                                    className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-2 rounded-lg text-sm"
-                                                >
-                                                    View
-                                                </button>
-                                                <button 
-                                                    onClick={() => setConfirmCancel(doc.id)} 
-                                                    className="text-red-600 hover:text-red-800 font-medium py-1 px-2 rounded-lg text-sm"
-                                                    title="Cancel Invoice"
-                                                >
-                                                    Cancel
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {displayedInvoices.map(doc => {
+                                    const paymentStatus = getPaymentStatus(doc);
+                                    const remaining = doc.total - (doc.totalPaid || 0);
+                                    
+                                    return (
+                                        <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
+                                            <td className="py-3 px-6 text-left font-medium">{doc.documentNumber}</td>
+                                            <td className="py-3 px-6 text-left">{doc.client.name}</td>
+                                            <td className="py-3 px-6 text-center">{doc.date.toDate().toLocaleDateString()}</td>
+                                            <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
+                                            <td className="py-3 px-6 text-right font-semibold">${(doc.totalPaid || 0).toFixed(2)}</td>
+                                            <td className="py-3 px-6 text-center">
+                                                <span className={`px-2 py-1 text-xs rounded-full ${paymentStatus.color}`}>
+                                                    {paymentStatus.label}
+                                                </span>
+                                            </td>
+                                            <td className="py-3 px-6 text-center">
+                                                <div className="flex item-center justify-center gap-1">
+                                                    <button 
+                                                        onClick={() => navigateTo('viewDocument', doc)} 
+                                                        className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-2 rounded-lg text-sm"
+                                                    >
+                                                        View
+                                                    </button>
+                                                    {remaining > 0 && (
+                                                        <button 
+                                                            onClick={() => openPaymentModal(doc)} 
+                                                            className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                        >
+                                                            Pay
+                                                        </button>
+                                                    )}
+                                                    <button 
+                                                        onClick={() => setConfirmCancel(doc.id)} 
+                                                        className="text-red-600 hover:text-red-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                        title="Cancel Invoice"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     )}
@@ -208,27 +334,126 @@ const InvoicesPage = ({ navigateTo }) => {
                         </button>
                     </div>
                 )}
-                
-                {/* Summary Statistics */}
-                {displayedInvoices.length > 0 && (
-                    <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div>
-                                <p className="text-sm text-gray-600">Total Amount</p>
-                                <p className="text-xl font-bold text-gray-800">${totalAmount.toFixed(2)}</p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-600">Average Invoice</p>
-                                <p className="text-xl font-bold text-gray-800">${averageAmount.toFixed(2)}</p>
-                            </div>
-                            <div>
-                                <p className="text-sm text-gray-600">Invoices Shown</p>
-                                <p className="text-xl font-bold text-gray-800">{displayedInvoices.length} of {filteredInvoices.length}</p>
+            </div>
+
+            {/* Payment Modal */}
+            {showPaymentModal && selectedInvoice && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+                    <div className="bg-white rounded-lg shadow-2xl p-6 max-w-lg w-full">
+                        <h3 className="text-lg font-bold mb-4">Add Payment for {selectedInvoice.documentNumber}</h3>
+                        
+                        <div className="mb-4">
+                            <p className="text-sm text-gray-600">Client: {selectedInvoice.client.name}</p>
+                            <p className="text-sm text-gray-600">Total Amount: ${selectedInvoice.total.toFixed(2)}</p>
+                            <p className="text-sm text-gray-600">Already Paid: ${(selectedInvoice.totalPaid || 0).toFixed(2)}</p>
+                            <p className="text-sm font-semibold text-gray-800">
+                                Remaining: ${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
+                            </p>
+                        </div>
+
+                        {/* Quick payment options */}
+                        <div className="mb-4">
+                            <p className="text-sm font-medium text-gray-700 mb-2">Quick Options:</p>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setPaymentAmount((selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2))}
+                                    className="px-3 py-1 bg-green-100 hover:bg-green-200 text-green-800 rounded text-sm"
+                                >
+                                    Full Payment
+                                </button>
+                                <button
+                                    onClick={() => setPaymentAmount('500')}
+                                    className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-sm"
+                                >
+                                    $500
+                                </button>
+                                <button
+                                    onClick={() => setPaymentAmount('1000')}
+                                    className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-sm"
+                                >
+                                    $1000
+                                </button>
                             </div>
                         </div>
+                        
+                        <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Amount</label>
+                            <input
+                                type="number"
+                                value={paymentAmount}
+                                onChange={(e) => setPaymentAmount(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                step="0.01"
+                                min="0.01"
+                                max={(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
+                            />
+                        </div>
+                        
+                        <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
+                            <input
+                                type="date"
+                                value={paymentDate}
+                                onChange={(e) => setPaymentDate(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                        </div>
+                        
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Note (optional)</label>
+                            <input
+                                type="text"
+                                value={paymentNote}
+                                onChange={(e) => setPaymentNote(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                placeholder="e.g., Check #123, Bank transfer"
+                            />
+                        </div>
+
+                        {/* Previous payments */}
+                        {selectedInvoice.payments && selectedInvoice.payments.length > 0 && (
+                            <div className="mb-4 p-3 bg-gray-50 rounded">
+                                <p className="text-sm font-medium text-gray-700 mb-2">Previous Payments:</p>
+                                <div className="space-y-1">
+                                    {selectedInvoice.payments.map((payment, index) => (
+                                        <div key={index} className="flex justify-between items-center text-xs">
+                                            <span>
+                                                {new Date(payment.date.seconds ? payment.date.seconds * 1000 : payment.date).toLocaleDateString()}: 
+                                                ${payment.amount.toFixed(2)} {payment.note && `(${payment.note})`}
+                                            </span>
+                                            <button
+                                                onClick={() => {
+                                                    setShowPaymentModal(false);
+                                                    handleCancelPayment(selectedInvoice, index);
+                                                }}
+                                                className="text-red-600 hover:text-red-800"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className="flex justify-end gap-2">
+                            <button
+                                onClick={() => setShowPaymentModal(false)}
+                                className="px-4 py-2 bg-gray-300 hover:bg-gray-400 rounded-lg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleAddPayment}
+                                disabled={!paymentAmount || parseFloat(paymentAmount) <= 0}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
+                            >
+                                Add Payment
+                            </button>
+                        </div>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
             
             {/* Cancel Confirmation Modal */}
             {confirmCancel && (

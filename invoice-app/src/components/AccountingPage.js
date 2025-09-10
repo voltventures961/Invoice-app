@@ -22,7 +22,10 @@ const AccountingPage = () => {
         itemsRevenue: 0,
         vatCollected: 0,
         invoiceCount: 0,
-        averageInvoiceValue: 0
+        averageInvoiceValue: 0,
+        totalPaid: 0,
+        totalUnpaid: 0,
+        overdueAmount: 0
     });
 
     const getDateRange = () => {
@@ -86,11 +89,28 @@ const AccountingPage = () => {
             let laborRevenue = 0;
             let itemsRevenue = 0;
             let vatCollected = 0;
+            let totalPaid = 0;
+            let totalUnpaid = 0;
+            let overdueAmount = 0;
+            
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
             docs.forEach(doc => {
                 totalRevenue += doc.total || 0;
                 vatCollected += doc.vatAmount || 0;
                 laborRevenue += doc.laborPrice || 0;
+                
+                // Calculate payment status
+                const paid = doc.totalPaid || 0;
+                totalPaid += paid;
+                const unpaid = Math.max(0, (doc.total || 0) - paid);
+                totalUnpaid += unpaid;
+                
+                // Check if overdue
+                if (unpaid > 0 && doc.date.toDate() < thirtyDaysAgo) {
+                    overdueAmount += unpaid;
+                }
                 
                 // Calculate items revenue and cost
                 if (doc.items && Array.isArray(doc.items)) {
@@ -114,7 +134,10 @@ const AccountingPage = () => {
                 itemsRevenue,
                 vatCollected,
                 invoiceCount: docs.length,
-                averageInvoiceValue
+                averageInvoiceValue,
+                totalPaid,
+                totalUnpaid,
+                overdueAmount
             });
 
             // Get unique clients for filter dropdown
@@ -192,15 +215,24 @@ const AccountingPage = () => {
             filtered = filtered.filter(doc => doc.client.id === clientFilter);
         }
         
-        // Apply status filter (assuming paid field exists)
+        // Apply status filter based on payment tracking
         if (statusFilter === 'paid') {
-            filtered = filtered.filter(doc => doc.paid === true);
+            filtered = filtered.filter(doc => {
+                const totalPaid = doc.totalPaid || 0;
+                return totalPaid >= doc.total;
+            });
         } else if (statusFilter === 'unpaid') {
-            filtered = filtered.filter(doc => !doc.paid);
+            filtered = filtered.filter(doc => {
+                const totalPaid = doc.totalPaid || 0;
+                return totalPaid < doc.total;
+            });
         } else if (statusFilter === 'overdue') {
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            filtered = filtered.filter(doc => !doc.paid && doc.date.toDate() < thirtyDaysAgo);
+            filtered = filtered.filter(doc => {
+                const totalPaid = doc.totalPaid || 0;
+                return totalPaid < doc.total && doc.date.toDate() < thirtyDaysAgo;
+            });
         }
         
         // Apply sorting
@@ -374,6 +406,35 @@ const AccountingPage = () => {
                 </div>
             </div>
 
+            {/* Payment Status Metrics */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="bg-white p-6 rounded-lg shadow-lg border-l-4 border-green-500">
+                    <h3 className="text-lg font-semibold text-gray-700">Collected Payments</h3>
+                    <p className="text-3xl font-bold text-green-600 mt-2">${stats.totalPaid.toFixed(2)}</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                        {stats.totalRevenue > 0 
+                            ? `${((stats.totalPaid / stats.totalRevenue) * 100).toFixed(1)}% collected`
+                            : '0% collected'}
+                    </p>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg shadow-lg border-l-4 border-orange-500">
+                    <h3 className="text-lg font-semibold text-gray-700">Outstanding Amount</h3>
+                    <p className="text-3xl font-bold text-orange-600 mt-2">${stats.totalUnpaid.toFixed(2)}</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                        {stats.totalRevenue > 0 
+                            ? `${((stats.totalUnpaid / stats.totalRevenue) * 100).toFixed(1)}% unpaid`
+                            : '0% unpaid'}
+                    </p>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg shadow-lg border-l-4 border-red-500">
+                    <h3 className="text-lg font-semibold text-gray-700">Overdue Amount</h3>
+                    <p className="text-3xl font-bold text-red-600 mt-2">${stats.overdueAmount.toFixed(2)}</p>
+                    <p className="text-sm text-gray-500 mt-1">30+ days overdue</p>
+                </div>
+            </div>
+
             {/* Revenue Breakdown */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                 <div className="bg-white p-6 rounded-lg shadow-lg">
@@ -466,6 +527,7 @@ const AccountingPage = () => {
                                 >
                                     Total {sortColumn === 'total' && (sortDirection === 'asc' ? '↑' : '↓')}
                                 </th>
+                                <th className="py-3 px-6 text-right">Paid</th>
                                 <th className="py-3 px-6 text-right">Profit</th>
                                 <th className="py-3 px-6 text-center">Status</th>
                                 </tr>
@@ -476,7 +538,9 @@ const AccountingPage = () => {
                                     const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
                                     const profit = doc.total - cost - (doc.vatAmount || 0);
                                     const daysSinceIssued = Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24));
-                                    const isOverdue = !doc.paid && daysSinceIssued > 30;
+                                    const totalPaid = doc.totalPaid || 0;
+                                    const isPaid = totalPaid >= doc.total;
+                                    const isOverdue = !isPaid && daysSinceIssued > 30;
                                     
                                     return (
                                         <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
@@ -487,16 +551,19 @@ const AccountingPage = () => {
                                             <td className="py-3 px-6 text-right">${(doc.laborPrice || 0).toFixed(2)}</td>
                                             <td className="py-3 px-6 text-right">${(doc.vatAmount || 0).toFixed(2)}</td>
                                             <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
+                                            <td className="py-3 px-6 text-right font-semibold">${totalPaid.toFixed(2)}</td>
                                             <td className={`py-3 px-6 text-right font-semibold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                 ${profit.toFixed(2)}
                                             </td>
                                             <td className="py-3 px-6 text-center">
-                                                {doc.paid ? (
+                                                {isPaid ? (
                                                     <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Paid</span>
                                                 ) : isOverdue ? (
                                                     <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">Overdue</span>
+                                                ) : totalPaid > 0 ? (
+                                                    <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">Partial</span>
                                                 ) : (
-                                                    <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">Unpaid</span>
+                                                    <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">Unpaid</span>
                                                 )}
                                             </td>
                                         </tr>

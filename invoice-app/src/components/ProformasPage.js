@@ -16,6 +16,11 @@ const ProformasPage = ({ navigateTo }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [displayLimit, setDisplayLimit] = useState(20);
     const [confirmDelete, setConfirmDelete] = useState(null);
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [selectedProforma, setSelectedProforma] = useState(null);
+    const [paymentAmount, setPaymentAmount] = useState('');
+    const [paymentNote, setPaymentNote] = useState('');
+    const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -59,6 +64,88 @@ const ProformasPage = ({ navigateTo }) => {
 
         return () => unsubscribe();
     }, []);
+
+    // Calculate payment status
+    const getPaymentStatus = (proforma) => {
+        const totalPaid = proforma.totalPaid || 0;
+        const total = proforma.total || 0;
+        
+        if (totalPaid >= total) {
+            return { status: 'paid', label: 'Paid', color: 'bg-green-100 text-green-800' };
+        } else if (totalPaid > 0) {
+            return { status: 'partial', label: `Partial ($${totalPaid.toFixed(2)})`, color: 'bg-yellow-100 text-yellow-800' };
+        } else {
+            return { status: 'unpaid', label: 'Unpaid', color: 'bg-gray-100 text-gray-800' };
+        }
+    };
+
+    // Handle payment modal
+    const openPaymentModal = (proforma) => {
+        setSelectedProforma(proforma);
+        const remaining = proforma.total - (proforma.totalPaid || 0);
+        setPaymentAmount(remaining.toFixed(2));
+        setPaymentNote('');
+        setPaymentDate(new Date().toISOString().split('T')[0]);
+        setShowPaymentModal(true);
+    };
+
+    // Handle add payment
+    const handleAddPayment = async () => {
+        if (!selectedProforma || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
+        
+        try {
+            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, selectedProforma.id);
+            const amount = parseFloat(paymentAmount);
+            const currentPaid = selectedProforma.totalPaid || 0;
+            const newTotalPaid = Math.min(currentPaid + amount, selectedProforma.total);
+            
+            const payment = {
+                amount: amount,
+                date: new Date(paymentDate),
+                note: paymentNote,
+                timestamp: new Date()
+            };
+            
+            const payments = selectedProforma.payments || [];
+            payments.push(payment);
+            
+            await updateDoc(docRef, {
+                payments: payments,
+                totalPaid: newTotalPaid,
+                paid: newTotalPaid >= selectedProforma.total,
+                lastPaymentDate: new Date(paymentDate)
+            });
+            
+            setShowPaymentModal(false);
+            setSelectedProforma(null);
+        } catch (error) {
+            console.error("Error adding payment: ", error);
+            alert("Error adding payment. Please try again.");
+        }
+    };
+
+    // Handle cancel payment
+    const handleCancelPayment = async (proforma, paymentIndex) => {
+        if (!window.confirm('Are you sure you want to cancel this payment?')) return;
+        
+        try {
+            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, proforma.id);
+            const payments = [...(proforma.payments || [])];
+            
+            payments.splice(paymentIndex, 1);
+            
+            const newTotalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+            
+            await updateDoc(docRef, {
+                payments: payments,
+                totalPaid: newTotalPaid,
+                paid: newTotalPaid >= proforma.total
+            });
+        } catch (error) {
+            console.error("Error cancelling payment: ", error);
+            alert("Error cancelling payment. Please try again.");
+        }
+    };
 
     const fetchHistoryInvoices = async (loadMore = false) => {
         if (!auth.currentUser) return;
@@ -127,14 +214,19 @@ const ProformasPage = ({ navigateTo }) => {
                 return `INV-${year}-${String(newLastId).padStart(3, '0')}`;
             });
             
-            // Create new invoice document
+            // Create new invoice document with payment data
             const invoiceData = {
                 ...proforma,
                 type: 'invoice',
                 documentNumber: newInvoiceNumber,
                 proformaNumber: proforma.documentNumber,
                 convertedFrom: proforma.id,
-                date: new Date()
+                date: new Date(),
+                // Carry over payment information
+                payments: proforma.payments || [],
+                totalPaid: proforma.totalPaid || 0,
+                paid: proforma.paid || false,
+                lastPaymentDate: proforma.lastPaymentDate || null
             };
             
             // Remove proforma-specific fields
@@ -211,16 +303,22 @@ const ProformasPage = ({ navigateTo }) => {
     // Filter proformas based on search query
     const filteredProformas = proformas.filter(doc => {
         const search = searchQuery.toLowerCase();
+        const paymentStatus = getPaymentStatus(doc);
         return (
             doc.documentNumber.toLowerCase().includes(search) ||
             doc.client.name.toLowerCase().includes(search) ||
             doc.date.toDate().toLocaleDateString().includes(search) ||
-            doc.total.toString().includes(search)
+            doc.total.toString().includes(search) ||
+            paymentStatus.label.toLowerCase().includes(search)
         );
     });
 
     // Limit displayed proformas
     const displayedProformas = filteredProformas.slice(0, displayLimit);
+
+    // Calculate statistics
+    const totalAmount = displayedProformas.reduce((sum, doc) => sum + doc.total, 0);
+    const totalPaidAmount = displayedProformas.reduce((sum, doc) => sum + (doc.totalPaid || 0), 0);
 
     return (
         <div>
@@ -246,11 +344,23 @@ const ProformasPage = ({ navigateTo }) => {
             <div className="mb-6">
                 <input
                     type="text"
-                    placeholder="Search by number, client, date, or amount..."
+                    placeholder="Search by number, client, date, amount, or payment status..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+            </div>
+
+            {/* Payment Summary */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className="bg-yellow-50 p-4 rounded-lg">
+                    <p className="text-sm text-yellow-600">Total Proforma Value</p>
+                    <p className="text-2xl font-bold text-yellow-800">${totalAmount.toFixed(2)}</p>
+                </div>
+                <div className="bg-green-50 p-4 rounded-lg">
+                    <p className="text-sm text-green-600">Advance Payments Received</p>
+                    <p className="text-2xl font-bold text-green-800">${totalPaidAmount.toFixed(2)}</p>
+                </div>
             </div>
 
             <div className="bg-white p-6 rounded-lg shadow-lg">
@@ -267,47 +377,66 @@ const ProformasPage = ({ navigateTo }) => {
                                 <th className="py-3 px-6 text-left">Client</th>
                                 <th className="py-3 px-6 text-center">Date</th>
                                 <th className="py-3 px-6 text-right">Total</th>
+                                <th className="py-3 px-6 text-center">Payment Status</th>
                                 <th className="py-3 px-6 text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="text-gray-600 text-sm font-light">
-                            {displayedProformas.map(doc => (
-                                <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
-                                    <td className="py-3 px-6 text-left">{doc.documentNumber}</td>
-                                    <td className="py-3 px-6 text-left">{doc.client.name}</td>
-                                    <td className="py-3 px-6 text-center">{doc.date.toDate().toLocaleDateString()}</td>
-                                    <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
-                                    <td className="py-3 px-6 text-center">
-                                        <div className="flex item-center justify-center gap-1">
-                                            <button 
-                                                onClick={() => navigateTo('viewDocument', doc)} 
-                                                className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-2 rounded-lg text-sm"
-                                            >
-                                                View
-                                            </button>
-                                            <button 
-                                                onClick={() => navigateTo('newDocument', doc)} 
-                                                className="text-gray-600 hover:text-purple-600 font-medium py-1 px-2 rounded-lg text-sm"
-                                            >
-                                                Edit
-                                            </button>
-                                            <button 
-                                                onClick={() => handleConvertToInvoice(doc)} 
-                                                className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
-                                                title="Convert to Invoice"
-                                            >
-                                                Convert
-                                            </button>
-                                            <button 
-                                                onClick={() => setConfirmDelete(doc.id)} 
-                                                className="text-red-600 hover:text-red-800 font-medium py-1 px-2 rounded-lg text-sm"
-                                            >
-                                                Delete
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
+                            {displayedProformas.map(doc => {
+                                const paymentStatus = getPaymentStatus(doc);
+                                const remaining = doc.total - (doc.totalPaid || 0);
+                                
+                                return (
+                                    <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
+                                        <td className="py-3 px-6 text-left">{doc.documentNumber}</td>
+                                        <td className="py-3 px-6 text-left">{doc.client.name}</td>
+                                        <td className="py-3 px-6 text-center">{doc.date.toDate().toLocaleDateString()}</td>
+                                        <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
+                                        <td className="py-3 px-6 text-center">
+                                            <span className={`px-2 py-1 text-xs rounded-full ${paymentStatus.color}`}>
+                                                {paymentStatus.label}
+                                            </span>
+                                        </td>
+                                        <td className="py-3 px-6 text-center">
+                                            <div className="flex item-center justify-center gap-1">
+                                                <button 
+                                                    onClick={() => navigateTo('viewDocument', doc)} 
+                                                    className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-2 rounded-lg text-sm"
+                                                >
+                                                    View
+                                                </button>
+                                                <button 
+                                                    onClick={() => navigateTo('newDocument', doc)} 
+                                                    className="text-gray-600 hover:text-purple-600 font-medium py-1 px-2 rounded-lg text-sm"
+                                                >
+                                                    Edit
+                                                </button>
+                                                {remaining > 0 && (
+                                                    <button 
+                                                        onClick={() => openPaymentModal(doc)} 
+                                                        className="text-blue-600 hover:text-blue-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                    >
+                                                        Pay
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={() => handleConvertToInvoice(doc)} 
+                                                    className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                    title="Convert to Invoice"
+                                                >
+                                                    Convert
+                                                </button>
+                                                <button 
+                                                    onClick={() => setConfirmDelete(doc.id)} 
+                                                    className="text-red-600 hover:text-red-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                     }
@@ -325,6 +454,131 @@ const ProformasPage = ({ navigateTo }) => {
                     </div>
                 )}
             </div>
+
+            {/* Payment Modal */}
+            {showPaymentModal && selectedProforma && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+                    <div className="bg-white rounded-lg shadow-2xl p-6 max-w-lg w-full">
+                        <h3 className="text-lg font-bold mb-4">Add Advance Payment for {selectedProforma.documentNumber}</h3>
+                        
+                        <div className="mb-4">
+                            <p className="text-sm text-gray-600">Client: {selectedProforma.client.name}</p>
+                            <p className="text-sm text-gray-600">Total Amount: ${selectedProforma.total.toFixed(2)}</p>
+                            <p className="text-sm text-gray-600">Already Paid: ${(selectedProforma.totalPaid || 0).toFixed(2)}</p>
+                            <p className="text-sm font-semibold text-gray-800">
+                                Remaining: ${(selectedProforma.total - (selectedProforma.totalPaid || 0)).toFixed(2)}
+                            </p>
+                        </div>
+
+                        {/* Quick payment options */}
+                        <div className="mb-4">
+                            <p className="text-sm font-medium text-gray-700 mb-2">Quick Options:</p>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setPaymentAmount((selectedProforma.total - (selectedProforma.totalPaid || 0)).toFixed(2))}
+                                    className="px-3 py-1 bg-green-100 hover:bg-green-200 text-green-800 rounded text-sm"
+                                >
+                                    Full Payment
+                                </button>
+                                <button
+                                    onClick={() => setPaymentAmount('500')}
+                                    className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-sm"
+                                >
+                                    $500
+                                </button>
+                                <button
+                                    onClick={() => setPaymentAmount('1000')}
+                                    className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded text-sm"
+                                >
+                                    $1000
+                                </button>
+                                <button
+                                    onClick={() => setPaymentAmount(((selectedProforma.total - (selectedProforma.totalPaid || 0)) * 0.5).toFixed(2))}
+                                    className="px-3 py-1 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded text-sm"
+                                >
+                                    50%
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Amount</label>
+                            <input
+                                type="number"
+                                value={paymentAmount}
+                                onChange={(e) => setPaymentAmount(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                step="0.01"
+                                min="0.01"
+                                max={(selectedProforma.total - (selectedProforma.totalPaid || 0)).toFixed(2)}
+                            />
+                        </div>
+                        
+                        <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
+                            <input
+                                type="date"
+                                value={paymentDate}
+                                onChange={(e) => setPaymentDate(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                        </div>
+                        
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Note (optional)</label>
+                            <input
+                                type="text"
+                                value={paymentNote}
+                                onChange={(e) => setPaymentNote(e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                placeholder="e.g., Advance payment, Deposit"
+                            />
+                        </div>
+
+                        {/* Previous payments */}
+                        {selectedProforma.payments && selectedProforma.payments.length > 0 && (
+                            <div className="mb-4 p-3 bg-gray-50 rounded">
+                                <p className="text-sm font-medium text-gray-700 mb-2">Previous Payments:</p>
+                                <div className="space-y-1">
+                                    {selectedProforma.payments.map((payment, index) => (
+                                        <div key={index} className="flex justify-between items-center text-xs">
+                                            <span>
+                                                {new Date(payment.date.seconds ? payment.date.seconds * 1000 : payment.date).toLocaleDateString()}: 
+                                                ${payment.amount.toFixed(2)} {payment.note && `(${payment.note})`}
+                                            </span>
+                                            <button
+                                                onClick={() => {
+                                                    setShowPaymentModal(false);
+                                                    handleCancelPayment(selectedProforma, index);
+                                                }}
+                                                className="text-red-600 hover:text-red-800"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className="flex justify-end gap-2">
+                            <button
+                                onClick={() => setShowPaymentModal(false)}
+                                className="px-4 py-2 bg-gray-300 hover:bg-gray-400 rounded-lg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleAddPayment}
+                                disabled={!paymentAmount || parseFloat(paymentAmount) <= 0}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
+                            >
+                                Add Payment
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Delete Confirmation Modal */}
             {confirmDelete && (

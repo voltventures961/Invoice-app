@@ -344,6 +344,27 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                                         <div className="text-sm text-gray-600">
                                             {item.brand && `Brand: ${item.brand} | `}
                                             {item.category && `Category: ${item.category} | `}
+                                            {item.type && `Type: ${item.type} | `}
+                                            {item.color && (
+                                                <span>
+                                                    Color: <span className="inline-block px-2 py-0.5 rounded" 
+                                                        style={{
+                                                            backgroundColor: item.color.toLowerCase() === 'white' ? '#f3f4f6' : 
+                                                                           item.color.toLowerCase() === 'black' ? '#1f2937' :
+                                                                           item.color.toLowerCase() === 'red' ? '#ef4444' :
+                                                                           item.color.toLowerCase() === 'blue' ? '#3b82f6' :
+                                                                           item.color.toLowerCase() === 'green' ? '#10b981' :
+                                                                           item.color.toLowerCase() === 'yellow' ? '#f59e0b' :
+                                                                           item.color.toLowerCase() === 'gray' || item.color.toLowerCase() === 'grey' ? '#6b7280' :
+                                                                           '#e5e7eb',
+                                                            color: item.color.toLowerCase() === 'white' || 
+                                                                  item.color.toLowerCase() === 'yellow' ? '#1f2937' : '#ffffff',
+                                                            fontSize: '11px'
+                                                        }}>
+                                                        {item.color}
+                                                    </span> | 
+                                                </span>
+                                            )}
                                             {item.partNumber && `Part #: ${item.partNumber} | `}
                                             Price: ${item.sellingPrice}
                                         </div>
