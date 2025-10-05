@@ -215,7 +215,9 @@ const AccountingPage = () => {
                 }
             });
 
-            // Calculate profit: Display mandays are profit, Real mandays are cost
+            // Calculate profit: 
+            // totalRevenue already includes display mandays (they're part of the document total)
+            // We need to subtract real mandays cost and other costs
             const totalProfit = totalRevenue - totalCost - vatCollected - realMandaysCost;
             const averageInvoiceValue = filteredDocs.length > 0 ? totalRevenue / filteredDocs.length : 0;
 
@@ -564,9 +566,12 @@ const AccountingPage = () => {
                             <span className="text-gray-600">Display Mandays (Your Profit)</span>
                             <span className="font-semibold text-green-600">${stats.displayMandaysRevenue.toFixed(2)}</span>
                         </div>
+                        <div className="text-xs text-gray-500 mt-1 mb-2">
+                            <strong>Note:</strong> Display mandays are already included in the document total above.
+                        </div>
                         <div className="flex justify-between items-center pt-3 border-t">
                             <span className="text-gray-700 font-medium">Subtotal (excl. VAT)</span>
-                            <span className="font-bold">${(stats.itemsRevenue + stats.laborRevenue + stats.displayMandaysRevenue).toFixed(2)}</span>
+                            <span className="font-bold">${(stats.totalRevenue - stats.vatCollected).toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-gray-600">VAT (11%)</span>
@@ -594,6 +599,9 @@ const AccountingPage = () => {
                             <span className="text-gray-600">Real Mandays Cost</span>
                             <span className="font-semibold text-red-600">-${stats.realMandaysCost.toFixed(2)}</span>
                         </div>
+                        <div className="text-xs text-gray-500 mt-1 mb-2">
+                            <strong>Note:</strong> Real mandays are actual costs to you (hidden from client).
+                        </div>
                         <div className="flex justify-between items-center pt-3 border-t">
                             <span className="text-gray-700 font-medium">Net Profit (Your Profit)</span>
                             <span className="font-bold text-green-600">${stats.totalProfit.toFixed(2)}</span>
@@ -609,6 +617,12 @@ const AccountingPage = () => {
                                     ? `${((stats.totalProfit / (stats.totalRevenue - stats.vatCollected)) * 100).toFixed(1)}%`
                                     : '0%'}
                             </span>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-2 p-2 bg-gray-50 rounded">
+                            <strong>Profit Calculation:</strong><br/>
+                            Net Profit = Total Revenue - Cost of Goods - Real Mandays Cost - VAT<br/>
+                            <span className="text-green-600">✓ Display Mandays are already included in Total Revenue</span><br/>
+                            <span className="text-red-600">✗ Real Mandays Cost is subtracted as actual cost to you</span>
                         </div>
                     </div>
                 </div>
