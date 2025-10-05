@@ -5,12 +5,13 @@ import { auth, db } from '../firebase/config';
 const AccountingPage = () => {
     const [documents, setDocuments] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth', 'custom'
+    const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth', 'lastMonth', 'custom'
     const [customStartDate, setCustomStartDate] = useState('');
     const [customEndDate, setCustomEndDate] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('all'); // 'all', 'labor', 'items'
     const [clientFilter, setClientFilter] = useState('all'); // 'all' or client id
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'paid', 'unpaid', 'overdue'
+    const [documentTypeFilter, setDocumentTypeFilter] = useState('all'); // 'all', 'invoice', 'proforma'
     const [sortColumn, setSortColumn] = useState('date'); // Column to sort by
     const [sortDirection, setSortDirection] = useState('desc'); // 'asc' or 'desc'
     const [uniqueClients, setUniqueClients] = useState([]);
@@ -20,6 +21,7 @@ const AccountingPage = () => {
         totalProfit: 0,
         laborRevenue: 0,
         itemsRevenue: 0,
+        mandaysRevenue: 0,
         vatCollected: 0,
         invoiceCount: 0,
         averageInvoiceValue: 0,
@@ -38,6 +40,11 @@ const AccountingPage = () => {
                 return {
                     start: new Date(year, month, 1),
                     end: new Date(year, month + 1, 0, 23, 59, 59)
+                };
+            case 'lastMonth':
+                return {
+                    start: new Date(year, month - 1, 1),
+                    end: new Date(year, month, 0, 23, 59, 59)
                 };
             case 'ytd':
                 return {
@@ -65,9 +72,9 @@ const AccountingPage = () => {
         const startTimestamp = Timestamp.fromDate(dateRange.start);
         const endTimestamp = Timestamp.fromDate(dateRange.end);
 
+        // Query for both invoices and proformas
         let q = query(
-            collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
-            where('type', '==', 'invoice')
+            collection(db, `documents/${auth.currentUser.uid}/userDocuments`)
         );
 
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
@@ -76,7 +83,7 @@ const AccountingPage = () => {
                 const data = doc.data();
                 const docDate = data.date.toDate();
                 
-                // Filter by date range and exclude cancelled invoices
+                // Filter by date range and exclude cancelled documents
                 if (docDate >= dateRange.start && docDate <= dateRange.end && 
                     !data.cancelled && !data.deleted) {
                     docs.push({ id: doc.id, ...data });
@@ -88,6 +95,7 @@ const AccountingPage = () => {
             let totalCost = 0;
             let laborRevenue = 0;
             let itemsRevenue = 0;
+            let mandaysRevenue = 0;
             let vatCollected = 0;
             let totalPaid = 0;
             let totalUnpaid = 0;
@@ -100,6 +108,11 @@ const AccountingPage = () => {
                 totalRevenue += doc.total || 0;
                 vatCollected += doc.vatAmount || 0;
                 laborRevenue += doc.laborPrice || 0;
+                
+                // Separate mandays from labor revenue
+                if (doc.mandays && doc.mandays > 0) {
+                    mandaysRevenue += (doc.mandays * (doc.mandayRate || 0));
+                }
                 
                 // Calculate payment status
                 const paid = doc.totalPaid || 0;
@@ -123,7 +136,8 @@ const AccountingPage = () => {
                 }
             });
 
-            const totalProfit = totalRevenue - totalCost - vatCollected;
+            // Calculate profit excluding mandays (mandays are not profit, they're costs to the business)
+            const totalProfit = totalRevenue - totalCost - vatCollected - mandaysRevenue;
             const averageInvoiceValue = docs.length > 0 ? totalRevenue / docs.length : 0;
 
             setStats({
@@ -132,6 +146,7 @@ const AccountingPage = () => {
                 totalProfit,
                 laborRevenue,
                 itemsRevenue,
+                mandaysRevenue,
                 vatCollected,
                 invoiceCount: docs.length,
                 averageInvoiceValue,
@@ -155,24 +170,28 @@ const AccountingPage = () => {
         });
 
         return () => unsubscribe();
-    }, [filterPeriod, customStartDate, customEndDate]);
+    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter]);
 
     const exportToCSV = () => {
-        const headers = ['Date', 'Invoice #', 'Client', 'Items Revenue', 'Labor Revenue', 'VAT', 'Total', 'Cost', 'Profit'];
-        const rows = documents.map(doc => {
+        const headers = ['Date', 'Document #', 'Type', 'Client', 'Items Revenue', 'Labor Revenue', 'Mandays Revenue', 'VAT', 'Total', 'Cost', 'Mandays Cost', 'Net Profit'];
+        const rows = getFilteredDocuments().map(doc => {
             const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
             const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-            const profit = doc.total - cost - (doc.vatAmount || 0);
+            const mandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
+            const profit = doc.total - cost - (doc.vatAmount || 0) - mandaysRevenue;
             
             return [
                 doc.date.toDate().toLocaleDateString(),
                 doc.documentNumber,
+                doc.type === 'invoice' ? 'Invoice' : 'Proforma',
                 doc.client.name,
                 itemsRevenue.toFixed(2),
                 (doc.laborPrice || 0).toFixed(2),
+                mandaysRevenue.toFixed(2),
                 (doc.vatAmount || 0).toFixed(2),
                 doc.total.toFixed(2),
                 cost.toFixed(2),
+                mandaysRevenue.toFixed(2),
                 profit.toFixed(2)
             ];
         });
@@ -202,6 +221,13 @@ const AccountingPage = () => {
 
     const getFilteredDocuments = () => {
         let filtered = documents;
+        
+        // Apply document type filter
+        if (documentTypeFilter === 'invoice') {
+            filtered = filtered.filter(doc => doc.type === 'invoice');
+        } else if (documentTypeFilter === 'proforma') {
+            filtered = filtered.filter(doc => doc.type === 'proforma');
+        }
         
         // Apply category filter
         if (categoryFilter === 'labor') {
@@ -292,17 +318,18 @@ const AccountingPage = () => {
             </div>
 
             {/* Filter Controls */}
-            <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
-                <h3 className="text-lg font-medium text-gray-700 mb-3">Filters</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="bg-white p-6 rounded-lg shadow-lg mb-6">
+                <h3 className="text-lg font-medium text-gray-700 mb-4">Filters & Controls</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Period</label>
                         <select 
                             value={filterPeriod} 
                             onChange={(e) => setFilterPeriod(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md"
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             <option value="thisMonth">This Month</option>
+                            <option value="lastMonth">Last Month</option>
                             <option value="ytd">Year to Date</option>
                             <option value="allTime">All Time</option>
                             <option value="custom">Custom Range</option>
@@ -317,7 +344,7 @@ const AccountingPage = () => {
                                     type="date" 
                                     value={customStartDate}
                                     onChange={(e) => setCustomStartDate(e.target.value)}
-                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 />
                             </div>
                             <div>
@@ -326,18 +353,31 @@ const AccountingPage = () => {
                                     type="date" 
                                     value={customEndDate}
                                     onChange={(e) => setCustomEndDate(e.target.value)}
-                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                 />
                             </div>
                         </>
                     )}
                     
                     <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Document Type</label>
+                        <select 
+                            value={documentTypeFilter} 
+                            onChange={(e) => setDocumentTypeFilter(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            <option value="all">All Documents</option>
+                            <option value="invoice">Invoices Only</option>
+                            <option value="proforma">Proformas Only</option>
+                        </select>
+                    </div>
+                    
+                    <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                         <select 
                             value={categoryFilter} 
                             onChange={(e) => setCategoryFilter(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md"
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             <option value="all">All Categories</option>
                             <option value="labor">Labor Only</option>
@@ -350,7 +390,7 @@ const AccountingPage = () => {
                         <select 
                             value={clientFilter} 
                             onChange={(e) => setClientFilter(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md"
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             <option value="all">All Clients</option>
                             {uniqueClients.map(client => (
@@ -364,7 +404,7 @@ const AccountingPage = () => {
                         <select 
                             value={statusFilter} 
                             onChange={(e) => setStatusFilter(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md"
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             <option value="all">All Status</option>
                             <option value="paid">Paid</option>
@@ -380,7 +420,7 @@ const AccountingPage = () => {
                 <div className="bg-gradient-to-r from-green-400 to-green-600 p-6 rounded-lg shadow-lg text-white">
                     <h3 className="text-lg font-semibold">Total Revenue</h3>
                     <p className="text-3xl font-bold mt-2">${stats.totalRevenue.toFixed(2)}</p>
-                    <p className="text-sm mt-1">{stats.invoiceCount} invoices</p>
+                    <p className="text-sm mt-1">{stats.invoiceCount} documents</p>
                 </div>
                 
                 <div className="bg-gradient-to-r from-blue-400 to-blue-600 p-6 rounded-lg shadow-lg text-white">
@@ -388,15 +428,15 @@ const AccountingPage = () => {
                     <p className="text-3xl font-bold mt-2">${stats.totalProfit.toFixed(2)}</p>
                     <p className="text-sm mt-1">
                         {stats.totalRevenue > 0 
-                            ? `${((stats.totalProfit / stats.totalRevenue) * 100).toFixed(1)}% margin`
+                            ? `${((stats.totalProfit / (stats.totalRevenue - stats.vatCollected)) * 100).toFixed(1)}% margin`
                             : '0% margin'}
                     </p>
                 </div>
                 
                 <div className="bg-gradient-to-r from-purple-400 to-purple-600 p-6 rounded-lg shadow-lg text-white">
-                    <h3 className="text-lg font-semibold">Average Invoice</h3>
+                    <h3 className="text-lg font-semibold">Average Document</h3>
                     <p className="text-3xl font-bold mt-2">${stats.averageInvoiceValue.toFixed(2)}</p>
-                    <p className="text-sm mt-1">Per invoice</p>
+                    <p className="text-sm mt-1">Per document</p>
                 </div>
                 
                 <div className="bg-gradient-to-r from-yellow-400 to-yellow-600 p-6 rounded-lg shadow-lg text-white">
@@ -448,9 +488,13 @@ const AccountingPage = () => {
                             <span className="text-gray-600">Labor Revenue</span>
                             <span className="font-semibold">${stats.laborRevenue.toFixed(2)}</span>
                         </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-gray-600">Mandays Revenue</span>
+                            <span className="font-semibold text-orange-600">${stats.mandaysRevenue.toFixed(2)}</span>
+                        </div>
                         <div className="flex justify-between items-center pt-3 border-t">
                             <span className="text-gray-700 font-medium">Subtotal</span>
-                            <span className="font-bold">${(stats.itemsRevenue + stats.laborRevenue).toFixed(2)}</span>
+                            <span className="font-bold">${(stats.itemsRevenue + stats.laborRevenue + stats.mandaysRevenue).toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-gray-600">VAT (11%)</span>
@@ -474,9 +518,13 @@ const AccountingPage = () => {
                             <span className="text-gray-600">Cost of Goods</span>
                             <span className="font-semibold text-red-600">-${stats.totalCost.toFixed(2)}</span>
                         </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-gray-600">Mandays (Cost)</span>
+                            <span className="font-semibold text-red-600">-${stats.mandaysRevenue.toFixed(2)}</span>
+                        </div>
                         <div className="flex justify-between items-center pt-3 border-t">
-                            <span className="text-gray-700 font-medium">Gross Profit</span>
-                            <span className="font-bold">${(stats.totalRevenue - stats.vatCollected - stats.totalCost).toFixed(2)}</span>
+                            <span className="text-gray-700 font-medium">Net Profit</span>
+                            <span className="font-bold text-green-600">${stats.totalProfit.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-gray-600">Profit Margin</span>
@@ -495,75 +543,91 @@ const AccountingPage = () => {
                 <h2 className="text-xl font-semibold text-gray-700 mb-4">Transaction Details</h2>
                 <div className="overflow-x-auto">
                     {getFilteredDocuments().length === 0 ? (
-                        <p className="text-gray-500">No transactions found for the selected period.</p>
+                        <div className="text-center py-8">
+                            <p className="text-gray-500 text-lg">No transactions found for the selected filters.</p>
+                            <p className="text-gray-400 text-sm mt-2">Try adjusting your filter criteria to see more results.</p>
+                        </div>
                     ) : (
                         <table className="min-w-full bg-white">
-                            <thead className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal">
+                            <thead className="bg-gray-50 text-gray-700 uppercase text-sm leading-normal border-b-2 border-gray-200">
                             <tr>
                             <th 
                                 onClick={() => handleSort('date')}
-                                className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                className="py-4 px-6 text-left cursor-pointer hover:bg-gray-100 font-semibold"
                                 >
                                     Date {sortColumn === 'date' && (sortDirection === 'asc' ? '↑' : '↓')}
                                 </th>
                                 <th 
                                     onClick={() => handleSort('number')}
-                                    className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                    className="py-4 px-6 text-left cursor-pointer hover:bg-gray-100 font-semibold"
                                 >
-                                    Invoice # {sortColumn === 'number' && (sortDirection === 'asc' ? '↑' : '↓')}
+                                    Document # {sortColumn === 'number' && (sortDirection === 'asc' ? '↑' : '↓')}
                                 </th>
                                 <th 
                                     onClick={() => handleSort('client')}
-                                    className="py-3 px-6 text-left cursor-pointer hover:bg-gray-300"
+                                    className="py-4 px-6 text-left cursor-pointer hover:bg-gray-100 font-semibold"
                                 >
                                     Client {sortColumn === 'client' && (sortDirection === 'asc' ? '↑' : '↓')}
                                 </th>
-                                <th className="py-3 px-6 text-right">Items</th>
-                                <th className="py-3 px-6 text-right">Labor</th>
-                                <th className="py-3 px-6 text-right">VAT</th>
+                                <th className="py-4 px-6 text-right font-semibold">Type</th>
+                                <th className="py-4 px-6 text-right font-semibold">Items</th>
+                                <th className="py-4 px-6 text-right font-semibold">Labor</th>
+                                <th className="py-4 px-6 text-right font-semibold">Mandays</th>
+                                <th className="py-4 px-6 text-right font-semibold">VAT</th>
                                 <th 
                                     onClick={() => handleSort('total')}
-                                    className="py-3 px-6 text-right cursor-pointer hover:bg-gray-300"
+                                    className="py-4 px-6 text-right cursor-pointer hover:bg-gray-100 font-semibold"
                                 >
                                     Total {sortColumn === 'total' && (sortDirection === 'asc' ? '↑' : '↓')}
                                 </th>
-                                <th className="py-3 px-6 text-right">Paid</th>
-                                <th className="py-3 px-6 text-right">Profit</th>
-                                <th className="py-3 px-6 text-center">Status</th>
+                                <th className="py-4 px-6 text-right font-semibold">Paid</th>
+                                <th className="py-4 px-6 text-right font-semibold">Profit</th>
+                                <th className="py-4 px-6 text-center font-semibold">Status</th>
                                 </tr>
                             </thead>
-                            <tbody className="text-gray-600 text-sm font-light">
+                            <tbody className="text-gray-600 text-sm">
                                 {getFilteredDocuments().map(doc => {
                                     const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
                                     const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-                                    const profit = doc.total - cost - (doc.vatAmount || 0);
+                                    const mandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
+                                    const profit = doc.total - cost - (doc.vatAmount || 0) - mandaysRevenue;
                                     const daysSinceIssued = Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24));
                                     const totalPaid = doc.totalPaid || 0;
                                     const isPaid = totalPaid >= doc.total;
                                     const isOverdue = !isPaid && daysSinceIssued > 30;
                                     
                                     return (
-                                        <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-100">
-                                            <td className="py-3 px-6 text-left">{doc.date.toDate().toLocaleDateString()}</td>
-                                            <td className="py-3 px-6 text-left">{doc.documentNumber}</td>
-                                            <td className="py-3 px-6 text-left">{doc.client.name}</td>
-                                            <td className="py-3 px-6 text-right">${itemsRevenue.toFixed(2)}</td>
-                                            <td className="py-3 px-6 text-right">${(doc.laborPrice || 0).toFixed(2)}</td>
-                                            <td className="py-3 px-6 text-right">${(doc.vatAmount || 0).toFixed(2)}</td>
-                                            <td className="py-3 px-6 text-right font-semibold">${doc.total.toFixed(2)}</td>
-                                            <td className="py-3 px-6 text-right font-semibold">${totalPaid.toFixed(2)}</td>
-                                            <td className={`py-3 px-6 text-right font-semibold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        <tr key={doc.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150">
+                                            <td className="py-4 px-6 text-left font-medium">{doc.date.toDate().toLocaleDateString()}</td>
+                                            <td className="py-4 px-6 text-left font-medium">{doc.documentNumber}</td>
+                                            <td className="py-4 px-6 text-left">{doc.client.name}</td>
+                                            <td className="py-4 px-6 text-center">
+                                                <span className={`px-2 py-1 text-xs rounded-full font-medium ${
+                                                    doc.type === 'invoice' 
+                                                        ? 'bg-blue-100 text-blue-800' 
+                                                        : 'bg-purple-100 text-purple-800'
+                                                }`}>
+                                                    {doc.type === 'invoice' ? 'Invoice' : 'Proforma'}
+                                                </span>
+                                            </td>
+                                            <td className="py-4 px-6 text-right font-medium">${itemsRevenue.toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-medium">${(doc.laborPrice || 0).toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-medium text-orange-600">${mandaysRevenue.toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-medium">${(doc.vatAmount || 0).toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-bold text-lg">${doc.total.toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-semibold">${totalPaid.toFixed(2)}</td>
+                                            <td className={`py-4 px-6 text-right font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                 ${profit.toFixed(2)}
                                             </td>
-                                            <td className="py-3 px-6 text-center">
+                                            <td className="py-4 px-6 text-center">
                                                 {isPaid ? (
-                                                    <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Paid</span>
+                                                    <span className="px-3 py-1 text-xs rounded-full bg-green-100 text-green-800 font-medium">Paid</span>
                                                 ) : isOverdue ? (
-                                                    <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">Overdue</span>
+                                                    <span className="px-3 py-1 text-xs rounded-full bg-red-100 text-red-800 font-medium">Overdue</span>
                                                 ) : totalPaid > 0 ? (
-                                                    <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">Partial</span>
+                                                    <span className="px-3 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800 font-medium">Partial</span>
                                                 ) : (
-                                                    <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">Unpaid</span>
+                                                    <span className="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-800 font-medium">Unpaid</span>
                                                 )}
                                             </td>
                                         </tr>
