@@ -12,6 +12,7 @@ const AccountingPage = () => {
     const [clientFilter, setClientFilter] = useState('all'); // 'all' or client id
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'paid', 'unpaid', 'overdue'
     const [documentTypeFilter, setDocumentTypeFilter] = useState('all'); // 'all', 'invoice', 'proforma'
+    const [showConvertedFilter, setShowConvertedFilter] = useState('exclude'); // 'include', 'exclude', 'only'
     const [sortColumn, setSortColumn] = useState('date'); // Column to sort by
     const [sortDirection, setSortDirection] = useState('desc'); // 'asc' or 'desc'
     const [uniqueClients, setUniqueClients] = useState([]);
@@ -88,7 +89,7 @@ const AccountingPage = () => {
                 // Filter by date range and exclude cancelled documents
                 // Also exclude proformas that have been transformed to invoices
                 if (docDate >= dateRange.start && docDate <= dateRange.end && 
-                    !data.cancelled && !data.deleted && !data.transformedToInvoice) {
+                    !data.cancelled && !data.deleted && !data.transformedToInvoice && !data.convertedToInvoice) {
                     docs.push({ id: doc.id, ...data });
                 }
             });
@@ -96,12 +97,20 @@ const AccountingPage = () => {
             // Apply filters to get filtered documents
             let filteredDocs = docs;
             
-            // Apply document type filter
-            if (documentTypeFilter === 'invoice') {
-                filteredDocs = filteredDocs.filter(doc => doc.type === 'invoice');
-            } else if (documentTypeFilter === 'proforma') {
-                filteredDocs = filteredDocs.filter(doc => doc.type === 'proforma');
-            }
+        // Apply document type filter
+        if (documentTypeFilter === 'invoice') {
+            filteredDocs = filteredDocs.filter(doc => doc.type === 'invoice');
+        } else if (documentTypeFilter === 'proforma') {
+            filteredDocs = filteredDocs.filter(doc => doc.type === 'proforma');
+        }
+        
+        // Apply converted filter
+        if (showConvertedFilter === 'exclude') {
+            filteredDocs = filteredDocs.filter(doc => !doc.convertedToInvoice && !doc.transformedToInvoice);
+        } else if (showConvertedFilter === 'only') {
+            filteredDocs = filteredDocs.filter(doc => doc.convertedToInvoice || doc.transformedToInvoice);
+        }
+        // 'include' shows all documents
             
             // Apply category filter
             if (categoryFilter === 'labor') {
@@ -242,10 +251,10 @@ const AccountingPage = () => {
         });
 
         return () => unsubscribe();
-    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter]);
+    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter, showConvertedFilter]);
 
     const exportToCSV = () => {
-        const headers = ['Date', 'Document #', 'Type', 'Client', 'Items Revenue', 'Labor Revenue', 'Display Mandays', 'Real Mandays Cost', 'VAT', 'Total', 'Cost', 'Net Profit', 'Paid Amount', 'Collected Profit'];
+        const headers = ['Date', 'Document #', 'Type', 'Status', 'Client', 'Items Revenue', 'Labor Revenue', 'Display Mandays', 'Real Mandays Cost', 'VAT', 'Total', 'Cost', 'Net Profit', 'Paid Amount', 'Collected Profit'];
         const rows = getFilteredDocuments().map(doc => {
             const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
             const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
@@ -256,10 +265,16 @@ const AccountingPage = () => {
             const paymentRatio = paid / doc.total;
             const collectedProfit = profit * paymentRatio;
             
+            let status = 'Active';
+            if (doc.convertedToInvoice) status = 'Converted';
+            else if (doc.transformedToInvoice) status = 'Transformed';
+            else if (doc.cancelled) status = 'Cancelled';
+            
             return [
                 doc.date.toDate().toLocaleDateString(),
                 doc.documentNumber,
                 doc.type === 'invoice' ? 'Invoice' : 'Proforma',
+                status,
                 doc.client.name,
                 itemsRevenue.toFixed(2),
                 (doc.laborPrice || 0).toFixed(2),
@@ -360,7 +375,7 @@ const AccountingPage = () => {
             {/* Filter Controls */}
             <div className="bg-white p-6 rounded-lg shadow-lg mb-6">
                 <h3 className="text-lg font-medium text-gray-700 mb-4">Filters & Controls</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Period</label>
                         <select 
@@ -450,6 +465,19 @@ const AccountingPage = () => {
                             <option value="paid">Paid</option>
                             <option value="unpaid">Unpaid</option>
                             <option value="overdue">Overdue (30+ days)</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Converted Proformas</label>
+                        <select 
+                            value={showConvertedFilter} 
+                            onChange={(e) => setShowConvertedFilter(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                            <option value="exclude">Exclude Converted</option>
+                            <option value="include">Include All</option>
+                            <option value="only">Only Converted</option>
                         </select>
                     </div>
                 </div>
@@ -616,6 +644,36 @@ const AccountingPage = () => {
                 </div>
             </div>
 
+            {/* Conversion Summary */}
+            {showConvertedFilter === 'exclude' && (
+                <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg shadow-lg mb-8">
+                    <h2 className="text-xl font-semibold text-gray-800 mb-4">📊 Document Status Summary</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-white p-4 rounded-lg border-l-4 border-green-500">
+                            <h3 className="font-semibold text-green-700 mb-2">✅ Active Documents</h3>
+                            <p className="text-sm text-gray-600">
+                                Showing only active invoices and proformas that haven't been converted or cancelled.
+                                This gives you the most accurate view of your current business performance.
+                            </p>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border-l-4 border-orange-500">
+                            <h3 className="font-semibold text-orange-700 mb-2">🔄 Converted Proformas</h3>
+                            <p className="text-sm text-gray-600">
+                                Proformas that have been converted to invoices are excluded to prevent double-counting.
+                                Use "Include All" filter to see them if needed.
+                            </p>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border-l-4 border-blue-500">
+                            <h3 className="font-semibold text-blue-700 mb-2">📈 Accurate Metrics</h3>
+                            <p className="text-sm text-gray-600">
+                                All financial calculations (revenue, profit, costs) are based on active documents only,
+                                ensuring accurate business analysis.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Detailed Transactions */}
             <div className="bg-white p-6 rounded-lg shadow-lg">
                 <h2 className="text-xl font-semibold text-gray-700 mb-4">Transaction Details</h2>
@@ -682,13 +740,25 @@ const AccountingPage = () => {
                                             <td className="py-4 px-6 text-left font-medium">{doc.documentNumber}</td>
                                             <td className="py-4 px-6 text-left">{doc.client.name}</td>
                                             <td className="py-4 px-6 text-center">
-                                                <span className={`px-2 py-1 text-xs rounded-full font-medium ${
-                                                    doc.type === 'invoice' 
-                                                        ? 'bg-blue-100 text-blue-800' 
-                                                        : 'bg-purple-100 text-purple-800'
-                                                }`}>
-                                                    {doc.type === 'invoice' ? 'Invoice' : 'Proforma'}
-                                                </span>
+                                                <div className="flex flex-col items-center space-y-1">
+                                                    <span className={`px-2 py-1 text-xs rounded-full font-medium ${
+                                                        doc.type === 'invoice' 
+                                                            ? 'bg-blue-100 text-blue-800' 
+                                                            : 'bg-purple-100 text-purple-800'
+                                                    }`}>
+                                                        {doc.type === 'invoice' ? 'Invoice' : 'Proforma'}
+                                                    </span>
+                                                    {doc.convertedToInvoice && (
+                                                        <span className="px-2 py-1 text-xs rounded-full bg-orange-100 text-orange-800 font-medium">
+                                                            Converted
+                                                        </span>
+                                                    )}
+                                                    {doc.transformedToInvoice && (
+                                                        <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800 font-medium">
+                                                            Transformed
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td className="py-4 px-6 text-right font-medium">${itemsRevenue.toFixed(2)}</td>
                                             <td className="py-4 px-6 text-right font-medium">${(doc.laborPrice || 0).toFixed(2)}</td>
