@@ -166,13 +166,21 @@ const AccountingPage = () => {
                 laborRevenue += doc.laborPrice || 0;
                 
                 // Handle Display Mandays (shown to client, pure profit for you)
-                if (doc.mandays && doc.mandays > 0) {
-                    displayMandaysRevenue += (doc.mandays * (doc.mandayRate || 0));
+                if (doc.mandays && doc.mandays.days > 0) {
+                    const displayDays = doc.mandays.days || 0;
+                    const displayPeople = doc.mandays.people || 0;
+                    const displayCostPerDay = doc.mandays.costPerDay || 0;
+                    displayMandaysRevenue += (displayDays * displayPeople * displayCostPerDay);
                 }
                 
                 // Handle Real Mandays Cost (hidden from client, actual cost to you)
-                if (doc.realMandays && doc.realMandays > 0) {
-                    realMandaysCost += (doc.realMandays * (doc.realMandayRate || 0));
+                if (doc.realMandays && doc.realMandays.days > 0) {
+                    const realDays = doc.realMandays.days || 0;
+                    const realPeople = doc.realMandays.people || 0;
+                    const realCostPerDay = doc.realMandays.costPerDay || 0;
+                    const realCost = realDays * realPeople * realCostPerDay;
+                    realMandaysCost += realCost;
+                    console.log('Real Mandays Cost:', { realDays, realPeople, realCostPerDay, realCost, totalRealCost: realMandaysCost });
                 }
                 
                 // Calculate payment status and collected profit
@@ -186,8 +194,25 @@ const AccountingPage = () => {
                     const docItemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
                     const docItemsCost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
                     const docLaborRevenue = doc.laborPrice || 0;
-                    const docDisplayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
-                    const docRealMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+                    
+                    // Calculate display mandays revenue
+                    let docDisplayMandaysRevenue = 0;
+                    if (doc.mandays && doc.mandays.days > 0) {
+                        const displayDays = doc.mandays.days || 0;
+                        const displayPeople = doc.mandays.people || 0;
+                        const displayCostPerDay = doc.mandays.costPerDay || 0;
+                        docDisplayMandaysRevenue = displayDays * displayPeople * displayCostPerDay;
+                    }
+                    
+                    // Calculate real mandays cost
+                    let docRealMandaysCost = 0;
+                    if (doc.realMandays && doc.realMandays.days > 0) {
+                        const realDays = doc.realMandays.days || 0;
+                        const realPeople = doc.realMandays.people || 0;
+                        const realCostPerDay = doc.realMandays.costPerDay || 0;
+                        docRealMandaysCost = realDays * realPeople * realCostPerDay;
+                    }
+                    
                     const docVatAmount = doc.vatAmount || 0;
                     
                     // Calculate profit from this document
@@ -219,6 +244,16 @@ const AccountingPage = () => {
             // totalRevenue already includes display mandays (they're part of the document total)
             // We need to subtract real mandays cost and other costs
             const totalProfit = totalRevenue - totalCost - vatCollected - realMandaysCost;
+            
+            // Debug logging
+            console.log('Profit Calculation:', {
+                totalRevenue,
+                totalCost,
+                vatCollected,
+                realMandaysCost,
+                displayMandaysRevenue,
+                totalProfit
+            });
             const averageInvoiceValue = filteredDocs.length > 0 ? totalRevenue / filteredDocs.length : 0;
 
             setStats({
@@ -260,8 +295,25 @@ const AccountingPage = () => {
         const rows = getFilteredDocuments().map(doc => {
             const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
             const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-            const displayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
-            const realMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+            
+            // Calculate display mandays revenue
+            let displayMandaysRevenue = 0;
+            if (doc.mandays && doc.mandays.days > 0) {
+                const displayDays = doc.mandays.days || 0;
+                const displayPeople = doc.mandays.people || 0;
+                const displayCostPerDay = doc.mandays.costPerDay || 0;
+                displayMandaysRevenue = displayDays * displayPeople * displayCostPerDay;
+            }
+            
+            // Calculate real mandays cost
+            let realMandaysCost = 0;
+            if (doc.realMandays && doc.realMandays.days > 0) {
+                const realDays = doc.realMandays.days || 0;
+                const realPeople = doc.realMandays.people || 0;
+                const realCostPerDay = doc.realMandays.costPerDay || 0;
+                realMandaysCost = realDays * realPeople * realCostPerDay;
+            }
+            
             const profit = doc.total - cost - (doc.vatAmount || 0) - realMandaysCost;
             const paid = doc.totalPaid || 0;
             const paymentRatio = paid / doc.total;
@@ -740,8 +792,25 @@ const AccountingPage = () => {
                                 {getFilteredDocuments().map(doc => {
                                     const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
                                     const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-                                    const displayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
-                                    const realMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+                                    
+                                    // Calculate display mandays revenue
+                                    let displayMandaysRevenue = 0;
+                                    if (doc.mandays && doc.mandays.days > 0) {
+                                        const displayDays = doc.mandays.days || 0;
+                                        const displayPeople = doc.mandays.people || 0;
+                                        const displayCostPerDay = doc.mandays.costPerDay || 0;
+                                        displayMandaysRevenue = displayDays * displayPeople * displayCostPerDay;
+                                    }
+                                    
+                                    // Calculate real mandays cost
+                                    let realMandaysCost = 0;
+                                    if (doc.realMandays && doc.realMandays.days > 0) {
+                                        const realDays = doc.realMandays.days || 0;
+                                        const realPeople = doc.realMandays.people || 0;
+                                        const realCostPerDay = doc.realMandays.costPerDay || 0;
+                                        realMandaysCost = realDays * realPeople * realCostPerDay;
+                                    }
+                                    
                                     const profit = doc.total - cost - (doc.vatAmount || 0) - realMandaysCost;
                                     const daysSinceIssued = Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24));
                                     const totalPaid = doc.totalPaid || 0;
