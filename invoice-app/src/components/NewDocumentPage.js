@@ -40,7 +40,9 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const [lineItems, setLineItems] = useState([]);
     const [laborPrice, setLaborPrice] = useState(0);
     const [mandays, setMandays] = useState({ days: 0, people: 0, costPerDay: 0 });
+    const [realMandays, setRealMandays] = useState({ days: 0, people: 0, costPerDay: 0 });
     const [showMandays, setShowMandays] = useState(false);
+    const [showRealMandays, setShowRealMandays] = useState(false);
     const [notes, setNotes] = useState('');
     const [vatApplied, setVatApplied] = useState(false);
     const [documentNumber, setDocumentNumber] = useState('');
@@ -82,6 +84,11 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             if (documentToEdit.mandays) {
                 setMandays(documentToEdit.mandays);
                 setShowMandays(true);
+            }
+            // Load real mandays if exists
+            if (documentToEdit.realMandays) {
+                setRealMandays(documentToEdit.realMandays);
+                setShowRealMandays(true);
             }
         } else {
             setMode('create');
@@ -132,6 +139,10 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         return mandays.days * mandays.people * mandays.costPerDay;
     };
 
+    const calculateRealMandaysCost = () => {
+        return realMandays.days * realMandays.people * realMandays.costPerDay;
+    };
+
     const calculateSubtotal = () => {
         const itemsTotal = lineItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
         const mandaysCost = showMandays ? calculateMandalsCost() : 0;
@@ -143,7 +154,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
     const total = subtotal + vatAmount;
 
     const handleSaveDocument = async () => {
-        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0 && (!showMandays || calculateMandalsCost() === 0))) {
+        if (!selectedClient || (lineItems.length === 0 && parseFloat(laborPrice || 0) === 0 && (!showMandays || calculateMandalsCost() === 0) && (!showRealMandays || calculateRealMandaysCost() === 0))) {
             const modal = document.getElementById('error-modal');
             modal.classList.remove('hidden');
             setTimeout(() => modal.classList.add('hidden'), 3000);
@@ -158,6 +169,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
             items: lineItems,
             laborPrice: parseFloat(laborPrice || 0),
             mandays: showMandays ? mandays : null,
+            realMandays: showRealMandays ? realMandays : null,
             notes,
             vatApplied,
             subtotal,
@@ -199,7 +211,7 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
         <div>
             <style>{`@media print {.no-print {display: none;}.buying-price-col {display: none;}}`}</style>
             <div id="error-modal" className="hidden fixed top-5 right-5 bg-red-500 text-white py-2 px-4 rounded-lg shadow-lg z-50 no-print">
-                Please select a client and add at least one item, labor charge, or mandays cost.
+                Please select a client and add at least one item, labor charge, display mandays, or real mandays cost.
             </div>
 
             <h1 className="text-3xl font-bold text-gray-800 mb-6 no-print">{pageTitle}</h1>
@@ -376,16 +388,16 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     </div>
                 </div>
 
-                {/* Mandays Section */}
-                <div className="mb-8 p-4 border rounded-lg bg-blue-50 no-print">
+                {/* Display Mandays Section */}
+                <div className="mb-8 p-4 border rounded-lg bg-green-50 no-print">
                     <div className="flex items-center justify-between mb-4">
-                        <label className="text-sm font-medium text-gray-700">Add Mandays Cost (Optional)</label>
+                        <label className="text-sm font-medium text-gray-700">Add Display Mandays (Shown to Client)</label>
                         <button
                             type="button"
                             onClick={() => setShowMandays(!showMandays)}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            className="text-green-600 hover:text-green-800 text-sm font-medium"
                         >
-                            {showMandays ? 'Remove Mandays' : '+ Add Mandays'}
+                            {showMandays ? 'Remove Display Mandays' : '+ Add Display Mandays'}
                         </button>
                     </div>
                     {showMandays && (
@@ -424,11 +436,74 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                     )}
                     {showMandays && calculateMandalsCost() > 0 && (
                         <div className="mt-3 p-2 bg-white rounded">
-                            <span className="text-sm text-gray-600">Total Mandays Cost: </span>
-                            <span className="font-bold text-blue-600">${calculateMandalsCost().toFixed(2)}</span>
+                            <span className="text-sm text-gray-600">Display Mandays Revenue: </span>
+                            <span className="font-bold text-green-600">${calculateMandalsCost().toFixed(2)}</span>
                             <span className="text-xs text-gray-500 ml-2">
                                 ({mandays.days} days × {mandays.people} people × ${mandays.costPerDay}/day)
                             </span>
+                            <div className="text-xs text-gray-500 mt-1">
+                                <strong>Note:</strong> This amount is shown to the client and counts as your profit.
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Real Mandays Section */}
+                <div className="mb-8 p-4 border rounded-lg bg-red-50 no-print">
+                    <div className="flex items-center justify-between mb-4">
+                        <label className="text-sm font-medium text-gray-700">Add Real Mandays Cost (Internal Only)</label>
+                        <button
+                            type="button"
+                            onClick={() => setShowRealMandays(!showRealMandays)}
+                            className="text-red-600 hover:text-red-800 text-sm font-medium"
+                        >
+                            {showRealMandays ? 'Remove Real Mandays' : '+ Add Real Mandays'}
+                        </button>
+                    </div>
+                    {showRealMandays && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Number of Days</label>
+                                <input
+                                    type="number"
+                                    value={realMandays.days}
+                                    onChange={(e) => setRealMandays({...realMandays, days: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 3"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Number of People</label>
+                                <input
+                                    type="number"
+                                    value={realMandays.people}
+                                    onChange={(e) => setRealMandays({...realMandays, people: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 2"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 mb-1">Cost per Day per Person</label>
+                                <input
+                                    type="number"
+                                    value={realMandays.costPerDay}
+                                    onChange={(e) => setRealMandays({...realMandays, costPerDay: parseFloat(e.target.value) || 0})}
+                                    className="w-full p-2 border border-gray-300 rounded-md"
+                                    placeholder="e.g., 80"
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {showRealMandays && calculateRealMandaysCost() > 0 && (
+                        <div className="mt-3 p-2 bg-white rounded">
+                            <span className="text-sm text-gray-600">Real Mandays Cost: </span>
+                            <span className="font-bold text-red-600">${calculateRealMandaysCost().toFixed(2)}</span>
+                            <span className="text-xs text-gray-500 ml-2">
+                                ({realMandays.days} days × {realMandays.people} people × ${realMandays.costPerDay}/day)
+                            </span>
+                            <div className="text-xs text-gray-500 mt-1">
+                                <strong>Note:</strong> This cost is hidden from the client and used for internal profit calculations.
+                            </div>
                         </div>
                     )}
                 </div>
@@ -445,8 +520,14 @@ const NewDocumentPage = ({ navigateTo, documentToEdit }) => {
                         </div>
                         {showMandays && calculateMandalsCost() > 0 && (
                             <div className="flex justify-between py-1">
-                                <span className="font-medium text-gray-600">Mandays Cost:</span>
-                                <span className="font-medium text-gray-800">${calculateMandalsCost().toFixed(2)}</span>
+                                <span className="font-medium text-gray-600">Display Mandays:</span>
+                                <span className="font-medium text-green-600">${calculateMandalsCost().toFixed(2)}</span>
+                            </div>
+                        )}
+                        {showRealMandays && calculateRealMandaysCost() > 0 && (
+                            <div className="flex justify-between py-1">
+                                <span className="font-medium text-gray-600">Real Mandays Cost:</span>
+                                <span className="font-medium text-red-600">${calculateRealMandaysCost().toFixed(2)}</span>
                             </div>
                         )}
                         <div className="flex justify-between py-1 mt-2">

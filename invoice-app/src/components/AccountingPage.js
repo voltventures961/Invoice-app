@@ -19,9 +19,11 @@ const AccountingPage = () => {
         totalRevenue: 0,
         totalCost: 0,
         totalProfit: 0,
+        collectedProfit: 0,
         laborRevenue: 0,
         itemsRevenue: 0,
-        mandaysRevenue: 0,
+        displayMandaysRevenue: 0,
+        realMandaysCost: 0,
         vatCollected: 0,
         invoiceCount: 0,
         averageInvoiceValue: 0,
@@ -84,8 +86,9 @@ const AccountingPage = () => {
                 const docDate = data.date.toDate();
                 
                 // Filter by date range and exclude cancelled documents
+                // Also exclude proformas that have been transformed to invoices
                 if (docDate >= dateRange.start && docDate <= dateRange.end && 
-                    !data.cancelled && !data.deleted) {
+                    !data.cancelled && !data.deleted && !data.transformedToInvoice) {
                     docs.push({ id: doc.id, ...data });
                 }
             });
@@ -137,11 +140,13 @@ const AccountingPage = () => {
             let totalCost = 0;
             let laborRevenue = 0;
             let itemsRevenue = 0;
-            let mandaysRevenue = 0;
+            let displayMandaysRevenue = 0;
+            let realMandaysCost = 0;
             let vatCollected = 0;
             let totalPaid = 0;
             let totalUnpaid = 0;
             let overdueAmount = 0;
+            let collectedProfit = 0;
             
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -151,16 +156,39 @@ const AccountingPage = () => {
                 vatCollected += doc.vatAmount || 0;
                 laborRevenue += doc.laborPrice || 0;
                 
-                // Separate mandays from labor revenue
+                // Handle Display Mandays (shown to client, pure profit for you)
                 if (doc.mandays && doc.mandays > 0) {
-                    mandaysRevenue += (doc.mandays * (doc.mandayRate || 0));
+                    displayMandaysRevenue += (doc.mandays * (doc.mandayRate || 0));
                 }
                 
-                // Calculate payment status
+                // Handle Real Mandays Cost (hidden from client, actual cost to you)
+                if (doc.realMandays && doc.realMandays > 0) {
+                    realMandaysCost += (doc.realMandays * (doc.realMandayRate || 0));
+                }
+                
+                // Calculate payment status and collected profit
                 const paid = doc.totalPaid || 0;
                 totalPaid += paid;
                 const unpaid = Math.max(0, (doc.total || 0) - paid);
                 totalUnpaid += unpaid;
+                
+                // Calculate collected profit (profit from paid invoices only)
+                if (paid > 0) {
+                    const docItemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
+                    const docItemsCost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
+                    const docLaborRevenue = doc.laborPrice || 0;
+                    const docDisplayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
+                    const docRealMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+                    const docVatAmount = doc.vatAmount || 0;
+                    
+                    // Calculate profit from this document
+                    // Display mandays are profit, real mandays are cost
+                    const docProfit = docItemsRevenue + docLaborRevenue + docDisplayMandaysRevenue - docItemsCost - docRealMandaysCost - docVatAmount;
+                    
+                    // Calculate collected profit proportionally
+                    const paymentRatio = paid / doc.total;
+                    collectedProfit += docProfit * paymentRatio;
+                }
                 
                 // Check if overdue
                 if (unpaid > 0 && doc.date.toDate() < thirtyDaysAgo) {
@@ -178,17 +206,19 @@ const AccountingPage = () => {
                 }
             });
 
-            // Calculate profit excluding mandays (mandays are not profit, they're costs to the business)
-            const totalProfit = totalRevenue - totalCost - vatCollected - mandaysRevenue;
+            // Calculate profit: Display mandays are profit, Real mandays are cost
+            const totalProfit = totalRevenue - totalCost - vatCollected - realMandaysCost;
             const averageInvoiceValue = filteredDocs.length > 0 ? totalRevenue / filteredDocs.length : 0;
 
             setStats({
                 totalRevenue,
                 totalCost,
                 totalProfit,
+                collectedProfit,
                 laborRevenue,
                 itemsRevenue,
-                mandaysRevenue,
+                displayMandaysRevenue,
+                realMandaysCost,
                 vatCollected,
                 invoiceCount: filteredDocs.length,
                 averageInvoiceValue,
@@ -215,12 +245,16 @@ const AccountingPage = () => {
     }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter]);
 
     const exportToCSV = () => {
-        const headers = ['Date', 'Document #', 'Type', 'Client', 'Items Revenue', 'Labor Revenue', 'Mandays Revenue', 'VAT', 'Total', 'Cost', 'Mandays Cost', 'Net Profit'];
+        const headers = ['Date', 'Document #', 'Type', 'Client', 'Items Revenue', 'Labor Revenue', 'Display Mandays', 'Real Mandays Cost', 'VAT', 'Total', 'Cost', 'Net Profit', 'Paid Amount', 'Collected Profit'];
         const rows = getFilteredDocuments().map(doc => {
             const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
             const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-            const mandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
-            const profit = doc.total - cost - (doc.vatAmount || 0) - mandaysRevenue;
+            const displayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
+            const realMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+            const profit = doc.total - cost - (doc.vatAmount || 0) - realMandaysCost;
+            const paid = doc.totalPaid || 0;
+            const paymentRatio = paid / doc.total;
+            const collectedProfit = profit * paymentRatio;
             
             return [
                 doc.date.toDate().toLocaleDateString(),
@@ -229,12 +263,14 @@ const AccountingPage = () => {
                 doc.client.name,
                 itemsRevenue.toFixed(2),
                 (doc.laborPrice || 0).toFixed(2),
-                mandaysRevenue.toFixed(2),
+                displayMandaysRevenue.toFixed(2),
+                realMandaysCost.toFixed(2),
                 (doc.vatAmount || 0).toFixed(2),
                 doc.total.toFixed(2),
                 cost.toFixed(2),
-                mandaysRevenue.toFixed(2),
-                profit.toFixed(2)
+                profit.toFixed(2),
+                paid.toFixed(2),
+                collectedProfit.toFixed(2)
             ];
         });
 
@@ -437,16 +473,20 @@ const AccountingPage = () => {
                     </p>
                 </div>
                 
+                <div className="bg-gradient-to-r from-emerald-400 to-emerald-600 p-6 rounded-lg shadow-lg text-white">
+                    <h3 className="text-lg font-semibold">Collected Profit</h3>
+                    <p className="text-3xl font-bold mt-2">${stats.collectedProfit.toFixed(2)}</p>
+                    <p className="text-sm mt-1">
+                        {stats.totalProfit > 0 
+                            ? `${((stats.collectedProfit / stats.totalProfit) * 100).toFixed(1)}% collected`
+                            : '0% collected'}
+                    </p>
+                </div>
+                
                 <div className="bg-gradient-to-r from-purple-400 to-purple-600 p-6 rounded-lg shadow-lg text-white">
                     <h3 className="text-lg font-semibold">Average Document</h3>
                     <p className="text-3xl font-bold mt-2">${stats.averageInvoiceValue.toFixed(2)}</p>
                     <p className="text-sm mt-1">Per document</p>
-                </div>
-                
-                <div className="bg-gradient-to-r from-yellow-400 to-yellow-600 p-6 rounded-lg shadow-lg text-white">
-                    <h3 className="text-lg font-semibold">VAT Collected</h3>
-                    <p className="text-3xl font-bold mt-2">${stats.vatCollected.toFixed(2)}</p>
-                    <p className="text-sm mt-1">11% VAT</p>
                 </div>
             </div>
 
@@ -485,20 +525,20 @@ const AccountingPage = () => {
                     <h2 className="text-xl font-semibold text-gray-700 mb-4">Revenue Breakdown</h2>
                     <div className="space-y-3">
                         <div className="flex justify-between items-center">
-                            <span className="text-gray-600">Items Revenue</span>
-                            <span className="font-semibold">${stats.itemsRevenue.toFixed(2)}</span>
+                            <span className="text-gray-600">Items Revenue (Your Profit)</span>
+                            <span className="font-semibold text-green-600">${stats.itemsRevenue.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
-                            <span className="text-gray-600">Labor Revenue</span>
-                            <span className="font-semibold">${stats.laborRevenue.toFixed(2)}</span>
+                            <span className="text-gray-600">Labor Revenue (Your Profit)</span>
+                            <span className="font-semibold text-green-600">${stats.laborRevenue.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
-                            <span className="text-gray-600">Mandays Revenue</span>
-                            <span className="font-semibold text-orange-600">${stats.mandaysRevenue.toFixed(2)}</span>
+                            <span className="text-gray-600">Display Mandays (Your Profit)</span>
+                            <span className="font-semibold text-green-600">${stats.displayMandaysRevenue.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center pt-3 border-t">
-                            <span className="text-gray-700 font-medium">Subtotal</span>
-                            <span className="font-bold">${(stats.itemsRevenue + stats.laborRevenue + stats.mandaysRevenue).toFixed(2)}</span>
+                            <span className="text-gray-700 font-medium">Subtotal (excl. VAT)</span>
+                            <span className="font-bold">${(stats.itemsRevenue + stats.laborRevenue + stats.displayMandaysRevenue).toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-gray-600">VAT (11%)</span>
@@ -519,16 +559,20 @@ const AccountingPage = () => {
                             <span className="font-semibold">${(stats.totalRevenue - stats.vatCollected).toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
-                            <span className="text-gray-600">Cost of Goods</span>
+                            <span className="text-gray-600">Cost of Goods Sold</span>
                             <span className="font-semibold text-red-600">-${stats.totalCost.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
-                            <span className="text-gray-600">Mandays (Cost)</span>
-                            <span className="font-semibold text-red-600">-${stats.mandaysRevenue.toFixed(2)}</span>
+                            <span className="text-gray-600">Real Mandays Cost</span>
+                            <span className="font-semibold text-red-600">-${stats.realMandaysCost.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center pt-3 border-t">
-                            <span className="text-gray-700 font-medium">Net Profit</span>
+                            <span className="text-gray-700 font-medium">Net Profit (Your Profit)</span>
                             <span className="font-bold text-green-600">${stats.totalProfit.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-gray-600">Collected Profit</span>
+                            <span className="font-bold text-emerald-600">${stats.collectedProfit.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-gray-600">Profit Margin</span>
@@ -538,6 +582,36 @@ const AccountingPage = () => {
                                     : '0%'}
                             </span>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Financial Strategy Explanation */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg shadow-lg mb-8">
+                <h2 className="text-xl font-semibold text-gray-800 mb-4">💰 Financial Strategy Breakdown</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-white p-4 rounded-lg border-l-4 border-green-500">
+                        <h3 className="font-semibold text-green-700 mb-2">✅ Your Profit Sources</h3>
+                        <ul className="text-sm text-gray-600 space-y-1">
+                            <li>• <strong>Items Revenue:</strong> Your profit from selling products</li>
+                            <li>• <strong>Labor Revenue:</strong> Your profit from your own work</li>
+                            <li>• <strong>Display Mandays:</strong> Shown to client, pure profit for you</li>
+                        </ul>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-l-4 border-orange-500">
+                        <h3 className="font-semibold text-orange-700 mb-2">💰 Your Costs</h3>
+                        <ul className="text-sm text-gray-600 space-y-1">
+                            <li>• <strong>Real Mandays Cost:</strong> Actual cost to you (hidden from client)</li>
+                            <li>• <strong>Cost of Goods:</strong> What you paid for items you sold</li>
+                        </ul>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-l-4 border-blue-500">
+                        <h3 className="font-semibold text-blue-700 mb-2">📊 Key Metrics</h3>
+                        <ul className="text-sm text-gray-600 space-y-1">
+                            <li>• <strong>Net Profit:</strong> Total profit (including unpaid)</li>
+                            <li>• <strong>Collected Profit:</strong> Profit from paid invoices only</li>
+                            <li>• <strong>Profit Margin:</strong> Your profit percentage</li>
+                        </ul>
                     </div>
                 </div>
             </div>
@@ -576,7 +650,8 @@ const AccountingPage = () => {
                                 <th className="py-4 px-6 text-right font-semibold">Type</th>
                                 <th className="py-4 px-6 text-right font-semibold">Items</th>
                                 <th className="py-4 px-6 text-right font-semibold">Labor</th>
-                                <th className="py-4 px-6 text-right font-semibold">Mandays</th>
+                                <th className="py-4 px-6 text-right font-semibold">Display Mandays</th>
+                                <th className="py-4 px-6 text-right font-semibold">Real Mandays</th>
                                 <th className="py-4 px-6 text-right font-semibold">VAT</th>
                                 <th 
                                     onClick={() => handleSort('total')}
@@ -593,8 +668,9 @@ const AccountingPage = () => {
                                 {getFilteredDocuments().map(doc => {
                                     const itemsRevenue = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * item.unitPrice), 0) : 0;
                                     const cost = doc.items ? doc.items.reduce((sum, item) => sum + (item.qty * (item.buyingPrice || 0)), 0) : 0;
-                                    const mandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
-                                    const profit = doc.total - cost - (doc.vatAmount || 0) - mandaysRevenue;
+                                    const displayMandaysRevenue = doc.mandays ? (doc.mandays * (doc.mandayRate || 0)) : 0;
+                                    const realMandaysCost = doc.realMandays ? (doc.realMandays * (doc.realMandayRate || 0)) : 0;
+                                    const profit = doc.total - cost - (doc.vatAmount || 0) - realMandaysCost;
                                     const daysSinceIssued = Math.floor((new Date() - doc.date.toDate()) / (1000 * 60 * 60 * 24));
                                     const totalPaid = doc.totalPaid || 0;
                                     const isPaid = totalPaid >= doc.total;
@@ -616,7 +692,8 @@ const AccountingPage = () => {
                                             </td>
                                             <td className="py-4 px-6 text-right font-medium">${itemsRevenue.toFixed(2)}</td>
                                             <td className="py-4 px-6 text-right font-medium">${(doc.laborPrice || 0).toFixed(2)}</td>
-                                            <td className="py-4 px-6 text-right font-medium text-orange-600">${mandaysRevenue.toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-medium text-green-600">${displayMandaysRevenue.toFixed(2)}</td>
+                                            <td className="py-4 px-6 text-right font-medium text-red-600">${realMandaysCost.toFixed(2)}</td>
                                             <td className="py-4 px-6 text-right font-medium">${(doc.vatAmount || 0).toFixed(2)}</td>
                                             <td className="py-4 px-6 text-right font-bold text-lg">${doc.total.toFixed(2)}</td>
                                             <td className="py-4 px-6 text-right font-semibold">${totalPaid.toFixed(2)}</td>
