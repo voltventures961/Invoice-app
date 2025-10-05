@@ -90,7 +90,49 @@ const AccountingPage = () => {
                 }
             });
 
-            // Calculate statistics
+            // Apply filters to get filtered documents
+            let filteredDocs = docs;
+            
+            // Apply document type filter
+            if (documentTypeFilter === 'invoice') {
+                filteredDocs = filteredDocs.filter(doc => doc.type === 'invoice');
+            } else if (documentTypeFilter === 'proforma') {
+                filteredDocs = filteredDocs.filter(doc => doc.type === 'proforma');
+            }
+            
+            // Apply category filter
+            if (categoryFilter === 'labor') {
+                filteredDocs = filteredDocs.filter(doc => doc.laborPrice && doc.laborPrice > 0);
+            } else if (categoryFilter === 'items') {
+                filteredDocs = filteredDocs.filter(doc => doc.items && doc.items.length > 0);
+            }
+            
+            // Apply client filter
+            if (clientFilter !== 'all') {
+                filteredDocs = filteredDocs.filter(doc => doc.client.id === clientFilter);
+            }
+            
+            // Apply status filter based on payment tracking
+            if (statusFilter === 'paid') {
+                filteredDocs = filteredDocs.filter(doc => {
+                    const totalPaid = doc.totalPaid || 0;
+                    return totalPaid >= doc.total;
+                });
+            } else if (statusFilter === 'unpaid') {
+                filteredDocs = filteredDocs.filter(doc => {
+                    const totalPaid = doc.totalPaid || 0;
+                    return totalPaid < doc.total;
+                });
+            } else if (statusFilter === 'overdue') {
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                filteredDocs = filteredDocs.filter(doc => {
+                    const totalPaid = doc.totalPaid || 0;
+                    return totalPaid < doc.total && doc.date.toDate() < thirtyDaysAgo;
+                });
+            }
+
+            // Calculate statistics on filtered data
             let totalRevenue = 0;
             let totalCost = 0;
             let laborRevenue = 0;
@@ -104,7 +146,7 @@ const AccountingPage = () => {
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-            docs.forEach(doc => {
+            filteredDocs.forEach(doc => {
                 totalRevenue += doc.total || 0;
                 vatCollected += doc.vatAmount || 0;
                 laborRevenue += doc.laborPrice || 0;
@@ -138,7 +180,7 @@ const AccountingPage = () => {
 
             // Calculate profit excluding mandays (mandays are not profit, they're costs to the business)
             const totalProfit = totalRevenue - totalCost - vatCollected - mandaysRevenue;
-            const averageInvoiceValue = docs.length > 0 ? totalRevenue / docs.length : 0;
+            const averageInvoiceValue = filteredDocs.length > 0 ? totalRevenue / filteredDocs.length : 0;
 
             setStats({
                 totalRevenue,
@@ -148,21 +190,21 @@ const AccountingPage = () => {
                 itemsRevenue,
                 mandaysRevenue,
                 vatCollected,
-                invoiceCount: docs.length,
+                invoiceCount: filteredDocs.length,
                 averageInvoiceValue,
                 totalPaid,
                 totalUnpaid,
                 overdueAmount
             });
 
-            // Get unique clients for filter dropdown
+            // Get unique clients for filter dropdown from all documents (not filtered)
             const clientsSet = new Set(docs.map(doc => JSON.stringify({ id: doc.client.id, name: doc.client.name })));
             const clientsList = Array.from(clientsSet).map(str => JSON.parse(str));
             setUniqueClients(clientsList);
 
-            // Sort documents by date
-            docs.sort((a, b) => b.date.toDate() - a.date.toDate());
-            setDocuments(docs);
+            // Sort filtered documents by date
+            filteredDocs.sort((a, b) => b.date.toDate() - a.date.toDate());
+            setDocuments(filteredDocs);
             setLoading(false);
         }, (error) => {
             console.error("Error fetching accounting data: ", error);
@@ -170,7 +212,7 @@ const AccountingPage = () => {
         });
 
         return () => unsubscribe();
-    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter]);
+    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter]);
 
     const exportToCSV = () => {
         const headers = ['Date', 'Document #', 'Type', 'Client', 'Items Revenue', 'Labor Revenue', 'Mandays Revenue', 'VAT', 'Total', 'Cost', 'Mandays Cost', 'Net Profit'];
@@ -220,46 +262,8 @@ const AccountingPage = () => {
     };
 
     const getFilteredDocuments = () => {
-        let filtered = documents;
-        
-        // Apply document type filter
-        if (documentTypeFilter === 'invoice') {
-            filtered = filtered.filter(doc => doc.type === 'invoice');
-        } else if (documentTypeFilter === 'proforma') {
-            filtered = filtered.filter(doc => doc.type === 'proforma');
-        }
-        
-        // Apply category filter
-        if (categoryFilter === 'labor') {
-            filtered = filtered.filter(doc => doc.laborPrice && doc.laborPrice > 0);
-        } else if (categoryFilter === 'items') {
-            filtered = filtered.filter(doc => doc.items && doc.items.length > 0);
-        }
-        
-        // Apply client filter
-        if (clientFilter !== 'all') {
-            filtered = filtered.filter(doc => doc.client.id === clientFilter);
-        }
-        
-        // Apply status filter based on payment tracking
-        if (statusFilter === 'paid') {
-            filtered = filtered.filter(doc => {
-                const totalPaid = doc.totalPaid || 0;
-                return totalPaid >= doc.total;
-            });
-        } else if (statusFilter === 'unpaid') {
-            filtered = filtered.filter(doc => {
-                const totalPaid = doc.totalPaid || 0;
-                return totalPaid < doc.total;
-            });
-        } else if (statusFilter === 'overdue') {
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            filtered = filtered.filter(doc => {
-                const totalPaid = doc.totalPaid || 0;
-                return totalPaid < doc.total && doc.date.toDate() < thirtyDaysAgo;
-            });
-        }
+        // Documents are already filtered in useEffect, just apply sorting
+        let filtered = [...documents];
         
         // Apply sorting
         filtered.sort((a, b) => {
