@@ -43,7 +43,7 @@ const Dashboard = ({ navigateTo }) => {
     const [unpaidInvoices, setUnpaidInvoices] = useState([]); // For follow-up table
     const [overdueInvoices, setOverdueInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [filterPeriod, setFilterPeriod] = useState('thisMonth'); // 'allTime', 'ytd', 'thisMonth'
+    const [filterPeriod, setFilterPeriod] = useState('allTime'); // 'allTime', 'ytd', 'thisMonth' - Default to All Time
     const [expandedCards, setExpandedCards] = useState({
         proformas: false,  // Collapsed by default
         invoices: false,   // Collapsed by default

@@ -10,6 +10,8 @@ const InvoicesPage = ({ navigateTo }) => {
     const [displayLimit, setDisplayLimit] = useState(20);
     const [showCancelledModal, setShowCancelledModal] = useState(false);
     const [confirmCancel, setConfirmCancel] = useState(null);
+    const [showPaymentRefundModal, setShowPaymentRefundModal] = useState(false);
+    const [pendingCancelInvoice, setPendingCancelInvoice] = useState(null);
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -149,14 +151,52 @@ const InvoicesPage = ({ navigateTo }) => {
 
     const handleCancelInvoice = async (invoiceId) => {
         if (!auth.currentUser) return;
-        
+
+        // Check if invoice has payments
+        const invoice = invoices.find(inv => inv.id === invoiceId);
+        const hasPaidAmount = invoice && (invoice.totalPaid || 0) > 0;
+
+        if (hasPaidAmount) {
+            // Show payment refund modal
+            setPendingCancelInvoice(invoice);
+            setShowPaymentRefundModal(true);
+            setConfirmCancel(null);
+        } else {
+            // No payments, just cancel
+            await cancelInvoiceNow(invoiceId, false);
+        }
+    };
+
+    const cancelInvoiceNow = async (invoiceId, movePaymentsToClientAccount) => {
+        if (!auth.currentUser) return;
+
         try {
             const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, invoiceId);
             await updateDoc(docRef, {
                 cancelled: true,
-                cancelledAt: new Date()
+                cancelledAt: new Date(),
+                paymentsMovedToClientAccount: movePaymentsToClientAccount
             });
+
+            if (movePaymentsToClientAccount) {
+                // Get all payments for this invoice
+                const paymentsQuery = query(collection(db, 'payments'), where('documentId', '==', invoiceId));
+                const paymentsSnapshot = await getDocs(paymentsQuery);
+
+                // Move payments to client account (unallocate them)
+                for (const paymentDoc of paymentsSnapshot.docs) {
+                    await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                        documentId: null,
+                        settledToDocument: false,
+                        notes: (paymentDoc.data().notes || '') + ' | Moved to client account due to invoice cancellation',
+                        updatedAt: new Date()
+                    });
+                }
+            }
+
             setConfirmCancel(null);
+            setShowPaymentRefundModal(false);
+            setPendingCancelInvoice(null);
         } catch (error) {
             console.error("Error cancelling invoice: ", error);
         }
@@ -348,6 +388,56 @@ const InvoicesPage = ({ navigateTo }) => {
                     </div>
                 )}
             </div>
+
+            {/* Payment Refund Modal */}
+            {showPaymentRefundModal && pendingCancelInvoice && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
+                    <div className="bg-white rounded-lg shadow-2xl p-6 max-w-lg">
+                        <h3 className="text-lg font-bold mb-4 text-orange-600">⚠️ Invoice Has Payments</h3>
+                        <div className="mb-6">
+                            <p className="mb-4">This invoice has received <strong className="text-green-600">${(pendingCancelInvoice.totalPaid || 0).toFixed(2)}</strong> in payments.</p>
+                            <p className="mb-4">What would you like to do with these payments?</p>
+
+                            <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                                <p className="text-sm text-blue-800">
+                                    <strong>Option 1:</strong> Move payments to client account balance<br/>
+                                    → Payments remain on record and can be used to settle other invoices
+                                </p>
+                            </div>
+
+                            <div className="bg-red-50 border-l-4 border-red-400 p-4">
+                                <p className="text-sm text-red-800">
+                                    <strong>Option 2:</strong> Payment was reimbursed externally<br/>
+                                    → Keeps payment history but marks invoice as cancelled
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <button
+                                onClick={() => cancelInvoiceNow(pendingCancelInvoice.id, true)}
+                                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium"
+                            >
+                                Move to Client Account Balance
+                            </button>
+                            <button
+                                onClick={() => cancelInvoiceNow(pendingCancelInvoice.id, false)}
+                                className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium"
+                            >
+                                Payment Reimbursed (Keep History Only)
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setShowPaymentRefundModal(false);
+                                    setPendingCancelInvoice(null);
+                                }}
+                                className="w-full px-4 py-2 bg-gray-300 hover:bg-gray-400 rounded-lg transition-colors"
+                            >
+                                Cancel (Keep Invoice Active)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Cancel Confirmation Modal */}
             {confirmCancel && (

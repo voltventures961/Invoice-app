@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc, limit as firestoreLimit } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { migratePayments, verifyMigration, repairMigratedPayments } from '../utils/paymentMigration';
 
@@ -53,15 +53,17 @@ const PaymentsPage = () => {
     }, []);
 
     useEffect(() => {
+        let unsubscribePayments = null;
+
         const fetchData = async () => {
             try {
-                // Check migration status first
-                if (auth.currentUser) {
-                    const migrationCheck = await verifyMigration(auth.currentUser.uid);
-                    setMigrationStatus(migrationCheck);
-                }
+                if (!auth.currentUser) return;
 
-                // Fetch clients from the correct user-specific path
+                // Check migration status first (lightweight check)
+                const migrationCheck = await verifyMigration(auth.currentUser.uid);
+                setMigrationStatus(migrationCheck);
+
+                // Fetch clients (usually small dataset) - use snapshot for real-time updates
                 const clientsQuery = query(collection(db, `clients/${auth.currentUser.uid}/userClients`), orderBy('name'));
                 const clientsSnapshot = await getDocs(clientsQuery);
                 const clientsData = clientsSnapshot.docs.map(doc => ({
@@ -70,8 +72,12 @@ const PaymentsPage = () => {
                 }));
                 setClients(clientsData);
 
-                // Fetch documents (invoices and proformas) from the correct path
-                const documentsQuery = query(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), orderBy('date', 'desc'));
+                // Fetch only invoices (not proformas) for better performance
+                const documentsQuery = query(
+                    collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
+                    where('type', '==', 'invoice'),
+                    orderBy('date', 'desc')
+                );
                 const documentsSnapshot = await getDocs(documentsQuery);
                 const documentsData = documentsSnapshot.docs.map(doc => ({
                     id: doc.id,
@@ -79,9 +85,13 @@ const PaymentsPage = () => {
                 }));
                 setDocuments(documentsData);
 
-                // Listen to payments with limit for better performance
-                const paymentsQuery = query(collection(db, 'payments'), orderBy('paymentDate', 'desc'));
-                const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
+                // Listen to payments (real-time) - this is the main data source
+                const paymentsQuery = query(
+                    collection(db, 'payments'),
+                    orderBy('paymentDate', 'desc')
+                );
+
+                unsubscribePayments = onSnapshot(paymentsQuery, (snapshot) => {
                     const paymentsData = snapshot.docs.map(doc => ({
                         id: doc.id,
                         ...doc.data()
@@ -93,7 +103,6 @@ const PaymentsPage = () => {
                     setLoading(false);
                 });
 
-                return () => unsubscribe();
             } catch (error) {
                 console.error('Error fetching data:', error);
                 setFeedback({ type: 'error', message: 'Failed to load data' });
@@ -102,6 +111,10 @@ const PaymentsPage = () => {
         };
 
         fetchData();
+
+        return () => {
+            if (unsubscribePayments) unsubscribePayments();
+        };
     }, []);
 
     const handleMigration = async () => {
@@ -394,11 +407,13 @@ const PaymentsPage = () => {
         return filtered;
     };
 
-    const getClientPayments = (clientId) => {
+    // Memoized client payments lookup
+    const getClientPayments = useCallback((clientId) => {
         return payments.filter(payment => payment.clientId === clientId);
-    };
+    }, [payments]);
 
-    const getClientDocuments = (clientId) => {
+    // Memoized client documents lookup
+    const getClientDocuments = useCallback((clientId) => {
         // Only return invoices (not proformas)
         return documents.filter(doc =>
             doc.type === 'invoice' && // Only invoices
@@ -409,29 +424,34 @@ const PaymentsPage = () => {
             !doc.convertedToInvoice &&
             !doc.converted
         );
-    };
+    }, [documents]);
 
-    // Calculate client account balance (unallocated payments - unpaid invoices)
-    const getClientAccountBalance = (clientId) => {
-        // Get all payments for this client
-        const clientPayments = payments.filter(payment => payment.clientId === clientId);
+    // Memoized client account balances
+    const clientBalancesMap = useMemo(() => {
+        const balances = {};
+        clients.forEach(client => {
+            const clientPayments = payments.filter(payment => payment.clientId === client.id);
+            const unallocatedPayments = clientPayments
+                .filter(payment => !payment.settledToDocument)
+                .reduce((sum, payment) => sum + payment.amount, 0);
+            balances[client.id] = unallocatedPayments;
+        });
+        return balances;
+    }, [payments, clients]);
 
-        // Sum unallocated payments (payments not settled to any document)
-        const unallocatedPayments = clientPayments
-            .filter(payment => !payment.settledToDocument)
-            .reduce((sum, payment) => sum + payment.amount, 0);
-
-        return unallocatedPayments;
-    };
+    // Calculate client account balance (unallocated payments)
+    const getClientAccountBalance = useCallback((clientId) => {
+        return clientBalancesMap[clientId] || 0;
+    }, [clientBalancesMap]);
 
     // Get total outstanding amount for a client (across all invoices)
-    const getClientOutstandingAmount = (clientId) => {
+    const getClientOutstandingAmount = useCallback((clientId) => {
         const clientDocs = getClientDocuments(clientId);
         return clientDocs.reduce((sum, doc) => {
             const outstanding = doc.total - (doc.totalPaid || 0);
             return sum + Math.max(0, outstanding);
         }, 0);
-    };
+    }, [getClientDocuments]);
 
     const getOutstandingAmount = (documentId) => {
         const document = documents.find(d => d.id === documentId);
@@ -582,12 +602,6 @@ const PaymentsPage = () => {
                             Migrate Old Payments
                         </button>
                     )}
-                    <button
-                        onClick={handleRepair}
-                        className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
-                    >
-                        Repair Payments
-                    </button>
                 </div>
             </div>
 
@@ -1027,6 +1041,14 @@ const PaymentsPage = () => {
                                                 <button
                                                     onClick={() => {
                                                         setEditingPayment(payment);
+
+                                                        // Find and pre-select client
+                                                        const client = clients.find(c => c.id === payment.clientId);
+                                                        if (client) {
+                                                            setSelectedClient(client);
+                                                            setClientSearchTerm(client.name);
+                                                        }
+
                                                         setFormData({
                                                             clientId: payment.clientId,
                                                             documentId: payment.documentId || '',
@@ -1076,11 +1098,35 @@ const PaymentsPage = () => {
             {/* Payment Receipt Modal */}
             {showPaymentReceipt && selectedPaymentForView && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setShowPaymentReceipt(false)}>
-                    <div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                    <style>{`
+                        @media print {
+                            @page {
+                                size: A4;
+                                margin: 20mm;
+                            }
+                            body * {
+                                visibility: hidden;
+                            }
+                            .print-receipt, .print-receipt * {
+                                visibility: visible !important;
+                            }
+                            .print-receipt {
+                                position: absolute;
+                                left: 0;
+                                top: 0;
+                                width: 100%;
+                                background: white !important;
+                            }
+                            .print-hidden {
+                                display: none !important;
+                            }
+                        }
+                    `}</style>
+                    <div className="bg-white rounded-lg shadow-2xl w-[210mm] max-h-[90vh] overflow-y-auto print-receipt" onClick={(e) => e.stopPropagation()}>
                         {/* Receipt Header */}
-                        <div className="bg-indigo-600 text-white px-6 py-4 flex justify-between items-center print:bg-white print:text-black">
+                        <div className="bg-indigo-600 text-white px-8 py-6 flex justify-between items-center print:bg-white print:text-black print:border-b-2 print:border-gray-300 print-hidden">
                             <h2 className="text-xl font-bold">Payment Receipt</h2>
-                            <button onClick={() => setShowPaymentReceipt(false)} className="text-white hover:text-gray-200 print:hidden">
+                            <button onClick={() => setShowPaymentReceipt(false)} className="text-white hover:text-gray-200">
                                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
                                 </svg>
@@ -1088,10 +1134,11 @@ const PaymentsPage = () => {
                         </div>
 
                         {/* Receipt Content */}
-                        <div className="p-8">
-                            {/* Company Info (from settings - you'll need to add this) */}
-                            <div className="mb-6 pb-6 border-b-2 border-gray-300">
-                                <h3 className="text-2xl font-bold text-gray-800 mb-2">Payment Confirmation</h3>
+                        <div className="p-12 print:p-0">
+                            {/* Company Header */}
+                            <div className="mb-8 pb-6 border-b-2 border-gray-300">
+                                <h3 className="text-3xl font-bold text-indigo-600 mb-1">Payment Receipt</h3>
+                                <p className="text-lg text-gray-700 font-medium mb-4">{clients.find(c => c.id === auth.currentUser?.uid)?.companyName || 'Your Company Name'}</p>
                                 <p className="text-sm text-gray-600">Receipt #{selectedPaymentForView.id.substring(0, 8).toUpperCase()}</p>
                             </div>
 
@@ -1183,7 +1230,7 @@ const PaymentsPage = () => {
                             </div>
 
                             {/* Action Buttons */}
-                            <div className="flex justify-center space-x-4 print:hidden">
+                            <div className="flex justify-center space-x-4 print-hidden">
                                 <button
                                     onClick={() => window.print()}
                                     className="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors flex items-center"
@@ -1235,121 +1282,212 @@ const PaymentsPage = () => {
 
             {/* Client Settlement Modal */}
             {showClientSettlement && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-white p-6 rounded-lg shadow-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-semibold text-gray-800">Client Settlement</h2>
-                            <button
-                                onClick={() => {
-                                    setShowClientSettlement(false);
-                                    setSelectedClientForSettlement(null);
-                                }}
-                                className="text-gray-500 hover:text-gray-700"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                        
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">Select Client</label>
-                                <select
-                                    value={selectedClientForSettlement?.id || ''}
-                                    onChange={(e) => {
-                                        const client = clients.find(c => c.id === e.target.value);
-                                        setSelectedClientForSettlement(client);
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                        {/* Header */}
+                        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h2 className="text-2xl font-bold">Client Settlement</h2>
+                                    <p className="text-indigo-100 text-sm mt-1">Allocate client balance to outstanding invoices</p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setShowClientSettlement(false);
+                                        setSelectedClientForSettlement(null);
                                     }}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    className="text-white hover:text-gray-200 transition-colors"
                                 >
-                                    <option value="">Select Client</option>
-                                    {clients.map(client => (
-                                        <option key={client.id} value={client.id}>{client.name}</option>
-                                    ))}
-                                </select>
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
                             </div>
+                        </div>
 
-                            {selectedClientForSettlement && (
-                                <div className="space-y-4">
-                                    <div className="bg-gray-50 p-4 rounded-lg">
-                                        <h3 className="font-semibold text-gray-800 mb-2">
-                                            Client: {selectedClientForSettlement.name}
-                                        </h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
-                                            <div>
-                                                <span className="text-gray-600">Account Balance:</span>
-                                                <span className="font-bold ml-2 text-green-600">
-                                                    ${getClientAccountBalance(selectedClientForSettlement.id).toFixed(2)}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-600">Total Outstanding:</span>
-                                                <span className="font-semibold ml-2 text-red-600">
-                                                    ${getClientOutstandingAmount(selectedClientForSettlement.id).toFixed(2)}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-600">Total Invoices:</span>
-                                                <span className="font-semibold ml-2">
-                                                    {getClientDocuments(selectedClientForSettlement.id).length}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                <span className="text-gray-600">Unpaid Invoices:</span>
-                                                <span className="font-semibold ml-2 text-orange-600">
-                                                    {getClientDocuments(selectedClientForSettlement.id).filter(doc => (doc.totalPaid || 0) < doc.total).length}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
-                                            <strong>Note:</strong> Account balance represents unallocated payments that can be used to settle invoices.
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <h3 className="font-semibold text-gray-800 mb-2">Settle Documents</h3>
-                                        <div className="space-y-2 max-h-60 overflow-y-auto">
-                                            {getClientDocuments(selectedClientForSettlement.id).map(doc => {
-                                                const outstanding = getOutstandingAmount(doc.id);
-                                                const isPaid = outstanding <= 0;
-                                                const docInfo = getDocumentInfo(doc.id);
-                                                
+                        {/* Content */}
+                        <div className="p-6 overflow-y-auto flex-1">
+                            <div className="space-y-6">
+                                {/* Client Selector */}
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Select Client</label>
+                                    <select
+                                        value={selectedClientForSettlement?.id || ''}
+                                        onChange={(e) => {
+                                            const client = clients.find(c => c.id === e.target.value);
+                                            setSelectedClientForSettlement(client);
+                                        }}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-lg"
+                                    >
+                                        <option value="">-- Choose a client to settle invoices --</option>
+                                        {clients
+                                            .filter(client => getClientAccountBalance(client.id) > 0 || getClientOutstandingAmount(client.id) > 0)
+                                            .map(client => {
+                                                const balance = getClientAccountBalance(client.id);
+                                                const outstanding = getClientOutstandingAmount(client.id);
                                                 return (
-                                                    <div key={doc.id} className={`p-3 border rounded-lg ${isPaid ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}`}>
-                                                        <div className="flex items-center justify-between">
-                                                            <div className="flex-1">
-                                                                <div className="flex items-center space-x-2">
-                                                                    <span className={`px-2 py-1 text-xs rounded-full ${
-                                                                        doc.type === 'invoice' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
-                                                                    }`}>
-                                                                        {docInfo.type} #{docInfo.number}
-                                                                    </span>
-                                                                    <span className="text-sm text-gray-600">
-                                                                        Total: ${docInfo.total.toFixed(2)}
-                                                                    </span>
-                                                                    <span className="text-sm text-gray-600">
-                                                                        Paid: ${(doc.totalPaid || 0).toFixed(2)}
-                                                                    </span>
-                                                                    <span className={`text-sm font-semibold ${isPaid ? 'text-green-600' : 'text-orange-600'}`}>
-                                                                        Outstanding: ${outstanding.toFixed(2)}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                            {!isPaid && (
-                                                                <button
-                                                                    onClick={() => handleSettleDocument(selectedClientForSettlement.id, doc.id, outstanding)}
-                                                                    className="ml-4 px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
-                                                                >
-                                                                    Settle ${outstanding.toFixed(2)}
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
+                                                    <option key={client.id} value={client.id}>
+                                                        {client.name} | Balance: ${balance.toFixed(2)} | Outstanding: ${outstanding.toFixed(2)}
+                                                    </option>
                                                 );
                                             })}
+                                    </select>
+                                </div>
+
+                                {selectedClientForSettlement && (
+                                    <div className="space-y-6">
+                                        {/* Client Summary Cards */}
+                                        <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-xl border-2 border-indigo-200">
+                                            <h3 className="font-bold text-lg text-gray-800 mb-4 flex items-center">
+                                                <svg className="w-5 h-5 mr-2 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"></path>
+                                                </svg>
+                                                {selectedClientForSettlement.name}
+                                            </h3>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                    <p className="text-xs text-gray-600 font-medium mb-1">Available Balance</p>
+                                                    <p className="text-2xl font-bold text-green-600">
+                                                        ${getClientAccountBalance(selectedClientForSettlement.id).toFixed(2)}
+                                                    </p>
+                                                </div>
+                                                <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                    <p className="text-xs text-gray-600 font-medium mb-1">Total Outstanding</p>
+                                                    <p className="text-2xl font-bold text-red-600">
+                                                        ${getClientOutstandingAmount(selectedClientForSettlement.id).toFixed(2)}
+                                                    </p>
+                                                </div>
+                                                <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                    <p className="text-xs text-gray-600 font-medium mb-1">Total Invoices</p>
+                                                    <p className="text-2xl font-bold text-gray-800">
+                                                        {getClientDocuments(selectedClientForSettlement.id).length}
+                                                    </p>
+                                                </div>
+                                                <div className="bg-white rounded-lg p-4 shadow-sm">
+                                                    <p className="text-xs text-gray-600 font-medium mb-1">Unpaid Invoices</p>
+                                                    <p className="text-2xl font-bold text-orange-600">
+                                                        {getClientDocuments(selectedClientForSettlement.id).filter(doc => (doc.totalPaid || 0) < doc.total).length}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Invoices List */}
+                                        <div>
+                                            <h3 className="font-bold text-lg text-gray-800 mb-3 flex items-center">
+                                                <svg className="w-5 h-5 mr-2 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+                                                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
+                                                    <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd"></path>
+                                                </svg>
+                                                Click on an invoice to settle it
+                                            </h3>
+                                            <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                                                {getClientDocuments(selectedClientForSettlement.id)
+                                                    .sort((a, b) => {
+                                                        // Sort unpaid first, then by outstanding amount (highest first)
+                                                        const outstandingA = getOutstandingAmount(a.id);
+                                                        const outstandingB = getOutstandingAmount(b.id);
+                                                        const isPaidA = outstandingA <= 0;
+                                                        const isPaidB = outstandingB <= 0;
+                                                        if (isPaidA !== isPaidB) return isPaidA ? 1 : -1;
+                                                        return outstandingB - outstandingA;
+                                                    })
+                                                    .map(doc => {
+                                                        const outstanding = getOutstandingAmount(doc.id);
+                                                        const isPaid = outstanding <= 0;
+                                                        const docInfo = getDocumentInfo(doc.id);
+                                                        const clientBalance = getClientAccountBalance(selectedClientForSettlement.id);
+                                                        const canSettle = Math.min(outstanding, clientBalance);
+                                                        const isPartialSettlement = canSettle > 0 && canSettle < outstanding;
+                                                        const cannotSettle = clientBalance <= 0;
+
+                                                        return (
+                                                            <div
+                                                                key={doc.id}
+                                                                onClick={() => {
+                                                                    if (!isPaid && canSettle > 0) {
+                                                                        handleSettleDocument(selectedClientForSettlement.id, doc.id, canSettle);
+                                                                    }
+                                                                }}
+                                                                className={`p-4 rounded-lg border-2 transition-all ${
+                                                                    isPaid
+                                                                        ? 'bg-green-50 border-green-300 opacity-60'
+                                                                        : cannotSettle
+                                                                        ? 'bg-gray-50 border-gray-300 opacity-60'
+                                                                        : 'bg-white border-orange-300 hover:border-indigo-500 hover:shadow-lg cursor-pointer transform hover:scale-[1.02]'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-start justify-between gap-4">
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                                                            <span className="px-3 py-1 text-sm font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                                                                                Invoice #{docInfo.number}
+                                                                            </span>
+                                                                            {isPaid && (
+                                                                                <span className="px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                                                                                    ✓ Paid
+                                                                                </span>
+                                                                            )}
+                                                                            {!isPaid && canSettle > 0 && (
+                                                                                <span className="px-3 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800 animate-pulse">
+                                                                                    Click to settle
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="grid grid-cols-3 gap-3 text-sm">
+                                                                            <div>
+                                                                                <span className="text-gray-600">Total:</span>
+                                                                                <span className="font-bold ml-2 text-gray-900">${docInfo.total.toFixed(2)}</span>
+                                                                            </div>
+                                                                            <div>
+                                                                                <span className="text-gray-600">Paid:</span>
+                                                                                <span className="font-bold ml-2 text-green-600">${(doc.totalPaid || 0).toFixed(2)}</span>
+                                                                            </div>
+                                                                            <div>
+                                                                                <span className="text-gray-600">Outstanding:</span>
+                                                                                <span className={`font-bold ml-2 ${isPaid ? 'text-green-600' : 'text-red-600'}`}>
+                                                                                    ${outstanding.toFixed(2)}
+                                                                                </span>
+                                                                            </div>
+                                                                        </div>
+                                                                        {isPartialSettlement && !isPaid && (
+                                                                            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                                                                                <strong>Partial Settlement:</strong> Will allocate ${canSettle.toFixed(2)} from available balance.
+                                                                                Remaining ${(outstanding - canSettle).toFixed(2)} will still be due.
+                                                                            </div>
+                                                                        )}
+                                                                        {cannotSettle && !isPaid && (
+                                                                            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                                                                                ⚠ No available balance. Add payment to client account first.
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                    {!isPaid && canSettle > 0 && (
+                                                                        <div className="flex-shrink-0">
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleSettleDocument(selectedClientForSettlement.id, doc.id, canSettle);
+                                                                                }}
+                                                                                className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-semibold rounded-lg hover:from-green-700 hover:to-green-800 shadow-md hover:shadow-lg transition-all transform hover:scale-105"
+                                                                            >
+                                                                                <div className="text-center">
+                                                                                    <div className="text-sm">Settle</div>
+                                                                                    <div className="text-lg">${canSettle.toFixed(2)}</div>
+                                                                                    {isPartialSettlement && <div className="text-xs opacity-90">(Partial)</div>}
+                                                                                </div>
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
