@@ -44,7 +44,6 @@ const PaymentsPage = () => {
                     id: doc.id,
                     ...doc.data()
                 }));
-                console.log(`Loaded ${clientsData.length} clients:`, clientsData.map(c => c.name));
                 setClients(clientsData);
 
                 // Fetch documents (invoices and proformas) from the correct path
@@ -54,7 +53,6 @@ const PaymentsPage = () => {
                     id: doc.id,
                     ...doc.data()
                 }));
-                console.log(`Loaded ${documentsData.length} documents:`, documentsData.map(d => `${d.type} #${d.invoiceNumber || d.proformaNumber || d.documentNumber}`));
                 setDocuments(documentsData);
 
                 // Listen to payments with limit for better performance
@@ -192,7 +190,6 @@ const PaymentsPage = () => {
                 updatedAt: new Date()
             };
 
-            console.log('Saving payment:', paymentData);
 
             if (editingPayment) {
                 // Update existing payment
@@ -246,7 +243,6 @@ const PaymentsPage = () => {
                 lastPaymentDate: new Date(),
                 updatedAt: new Date()
             });
-            console.log(`Updated document ${documentId} with totalPaid: ${totalPaid}`);
         } catch (error) {
             console.error('Error updating document payment status:', error);
         }
@@ -274,23 +270,27 @@ const PaymentsPage = () => {
     };
 
     const getFilteredDocuments = (clientId) => {
-        console.log('getFilteredDocuments called with clientId:', clientId);
-        console.log('Total documents available:', documents.length);
-        
         if (!clientId) {
             // Show all active documents if no client selected
+            // Exclude converted proformas to avoid double counting
             const filtered = documents.filter(doc => 
-                !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
+                !doc.cancelled && 
+                !doc.deleted && 
+                !doc.transformedToInvoice && 
+                !doc.convertedToInvoice &&
+                !doc.converted // Also exclude converted proformas
             );
-            console.log('No client selected, showing all active documents:', filtered.length);
             return filtered;
         }
         
         const filtered = documents.filter(doc => 
             doc.client && doc.client.id === clientId && 
-            !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
+            !doc.cancelled && 
+            !doc.deleted && 
+            !doc.transformedToInvoice && 
+            !doc.convertedToInvoice &&
+            !doc.converted // Also exclude converted proformas
         );
-        console.log(`Client ${clientId} selected, showing documents:`, filtered.length);
         return filtered;
     };
 
@@ -308,7 +308,11 @@ const PaymentsPage = () => {
     const getClientDocuments = (clientId) => {
         return documents.filter(doc => 
             doc.client && doc.client.id === clientId && 
-            !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
+            !doc.cancelled && 
+            !doc.deleted && 
+            !doc.transformedToInvoice && 
+            !doc.convertedToInvoice &&
+            !doc.converted // Exclude converted proformas
         );
     };
 
@@ -320,8 +324,6 @@ const PaymentsPage = () => {
     };
 
     const handleClientChange = (clientId) => {
-        console.log('Client changed to:', clientId);
-        console.log('Available clients:', clients);
         setFormData(prev => ({
             ...prev,
             clientId,
@@ -331,9 +333,7 @@ const PaymentsPage = () => {
     };
 
     const handleDocumentChange = (documentId) => {
-        console.log('Document changed to:', documentId);
         const outstanding = getOutstandingAmount(documentId);
-        console.log('Outstanding amount for document:', outstanding);
         setFormData(prev => ({
             ...prev,
             documentId,
@@ -394,20 +394,6 @@ const PaymentsPage = () => {
                         className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
                     >
                         Repair Payments
-                    </button>
-                    <button
-                        onClick={() => {
-                            console.log('=== DEBUG DATA ===');
-                            console.log('Clients:', clients);
-                            console.log('Documents:', documents);
-                            console.log('Payments:', payments);
-                            console.log('Form Data:', formData);
-                            console.log('Filtered Documents (no client):', getFilteredDocuments(''));
-                            console.log('Filtered Documents (with client):', getFilteredDocuments(formData.clientId));
-                        }}
-                        className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
-                    >
-                        Debug Data
                     </button>
                 </div>
             </div>

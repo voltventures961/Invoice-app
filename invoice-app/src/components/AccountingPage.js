@@ -87,9 +87,13 @@ const AccountingPage = () => {
                 const docDate = data.date.toDate();
                 
                 // Filter by date range and exclude cancelled documents
-                // Also exclude proformas that have been transformed to invoices
+                // Also exclude proformas that have been converted to invoices to avoid double counting
                 if (docDate >= dateRange.start && docDate <= dateRange.end && 
-                    !data.cancelled && !data.deleted && !data.transformedToInvoice && !data.convertedToInvoice) {
+                    !data.cancelled && 
+                    !data.deleted && 
+                    !data.transformedToInvoice && 
+                    !data.convertedToInvoice &&
+                    !data.converted) { // Exclude converted proformas
                     docs.push({ id: doc.id, ...data });
                 }
             });

@@ -38,9 +38,9 @@ const ProformasPage = ({ navigateTo }) => {
             querySnapshot.forEach((doc) => {
                 const data = { id: doc.id, ...doc.data() };
                 
-                // Check if it's converted to invoice
-                if (data.converted) {
-                    // Skip converted proformas from active list
+                // Check if it's converted to invoice - exclude from all lists to avoid double counting
+                if (data.converted || data.convertedToInvoice || data.transformedToInvoice) {
+                    // Skip converted proformas from all lists
                     return;
                 }
                 
