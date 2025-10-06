@@ -127,12 +127,16 @@ const InvoicesPage = ({ navigateTo }) => {
 
             // Update the document
             const documentRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentId);
+            const document = await getDocs(query(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), where('__name__', '==', documentId)));
+            const docData = document.docs[0]?.data();
+            
             await updateDoc(documentRef, {
                 totalPaid: totalPaid,
-                paid: totalPaid >= (selectedInvoice?.total || 0),
+                paid: totalPaid >= (docData?.total || 0),
                 lastPaymentDate: new Date(),
                 updatedAt: new Date()
             });
+            console.log(`Updated invoice ${documentId} with totalPaid: ${totalPaid}`);
         } catch (error) {
             console.error('Error updating document payment status:', error);
         }

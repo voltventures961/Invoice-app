@@ -24,6 +24,9 @@ const PaymentsPage = () => {
         reference: '',
         notes: ''
     });
+    const [clientFilter, setClientFilter] = useState('all'); // Filter payments by client
+    const [showClientSettlement, setShowClientSettlement] = useState(false);
+    const [selectedClientForSettlement, setSelectedClientForSettlement] = useState(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -34,8 +37,8 @@ const PaymentsPage = () => {
                     setMigrationStatus(migrationCheck);
                 }
 
-                // Fetch clients from the correct path
-                const clientsQuery = query(collection(db, `clients`), orderBy('name'));
+                // Fetch clients from the correct user-specific path
+                const clientsQuery = query(collection(db, `clients/${auth.currentUser.uid}/userClients`), orderBy('name'));
                 const clientsSnapshot = await getDocs(clientsQuery);
                 const clientsData = clientsSnapshot.docs.map(doc => ({
                     id: doc.id,
@@ -168,6 +171,19 @@ const PaymentsPage = () => {
         setFeedback({ type: '', message: '' });
 
         try {
+            // Validate required fields
+            if (!formData.clientId || !formData.documentId || !formData.amount) {
+                setFeedback({ type: 'error', message: 'Please fill in all required fields.' });
+                setLoading(false);
+                return;
+            }
+
+            if (parseFloat(formData.amount) <= 0) {
+                setFeedback({ type: 'error', message: 'Payment amount must be greater than 0.' });
+                setLoading(false);
+                return;
+            }
+
             const paymentData = {
                 ...formData,
                 amount: parseFloat(formData.amount),
@@ -175,6 +191,8 @@ const PaymentsPage = () => {
                 createdAt: new Date(),
                 updatedAt: new Date()
             };
+
+            console.log('Saving payment:', paymentData);
 
             if (editingPayment) {
                 // Update existing payment
@@ -195,7 +213,7 @@ const PaymentsPage = () => {
                 documentId: '',
                 amount: '',
                 paymentDate: new Date().toISOString().split('T')[0],
-                paymentMethod: 'bank_transfer',
+                paymentMethod: 'cash',
                 reference: '',
                 notes: ''
             });
@@ -220,12 +238,15 @@ const PaymentsPage = () => {
                 totalPaid += doc.data().amount;
             });
 
-            // Update the document
-            const documentRef = doc(db, 'userDocuments', documentId);
+            // Update the document with correct path
+            const documentRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentId);
             await updateDoc(documentRef, {
                 totalPaid: totalPaid,
+                paid: totalPaid >= (documents.find(d => d.id === documentId)?.total || 0),
+                lastPaymentDate: new Date(),
                 updatedAt: new Date()
             });
+            console.log(`Updated document ${documentId} with totalPaid: ${totalPaid}`);
         } catch (error) {
             console.error('Error updating document payment status:', error);
         }
@@ -253,12 +274,38 @@ const PaymentsPage = () => {
     };
 
     const getFilteredDocuments = (clientId) => {
+        console.log('getFilteredDocuments called with clientId:', clientId);
+        console.log('Total documents available:', documents.length);
+        
         if (!clientId) {
             // Show all active documents if no client selected
-            return documents.filter(doc => 
+            const filtered = documents.filter(doc => 
                 !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
             );
+            console.log('No client selected, showing all active documents:', filtered.length);
+            return filtered;
         }
+        
+        const filtered = documents.filter(doc => 
+            doc.client && doc.client.id === clientId && 
+            !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
+        );
+        console.log(`Client ${clientId} selected, showing documents:`, filtered.length);
+        return filtered;
+    };
+
+    const getFilteredPayments = () => {
+        if (clientFilter === 'all') {
+            return payments;
+        }
+        return payments.filter(payment => payment.clientId === clientFilter);
+    };
+
+    const getClientPayments = (clientId) => {
+        return payments.filter(payment => payment.clientId === clientId);
+    };
+
+    const getClientDocuments = (clientId) => {
         return documents.filter(doc => 
             doc.client && doc.client.id === clientId && 
             !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
@@ -273,6 +320,8 @@ const PaymentsPage = () => {
     };
 
     const handleClientChange = (clientId) => {
+        console.log('Client changed to:', clientId);
+        console.log('Available clients:', clients);
         setFormData(prev => ({
             ...prev,
             clientId,
@@ -282,12 +331,45 @@ const PaymentsPage = () => {
     };
 
     const handleDocumentChange = (documentId) => {
+        console.log('Document changed to:', documentId);
         const outstanding = getOutstandingAmount(documentId);
+        console.log('Outstanding amount for document:', outstanding);
         setFormData(prev => ({
             ...prev,
             documentId,
             amount: outstanding > 0 ? outstanding.toFixed(2) : ''
         }));
+    };
+
+    const handleSettleDocument = async (clientId, documentId, amount) => {
+        try {
+            setLoading(true);
+            
+            const paymentData = {
+                clientId: clientId,
+                documentId: documentId,
+                amount: parseFloat(amount),
+                paymentDate: new Date(),
+                paymentMethod: 'settlement',
+                reference: `Settlement payment`,
+                notes: 'Settlement from client account',
+                createdAt: new Date(),
+                updatedAt: new Date()
+            };
+
+            await addDoc(collection(db, 'payments'), paymentData);
+            await updateDocumentPaymentStatus(documentId);
+            
+            setFeedback({ type: 'success', message: 'Document settled successfully!' });
+            setShowClientSettlement(false);
+            setSelectedClientForSettlement(null);
+            
+        } catch (error) {
+            console.error('Error settling document:', error);
+            setFeedback({ type: 'error', message: 'Failed to settle document. Please try again.' });
+        } finally {
+            setLoading(false);
+        }
     };
 
     if (loading) {
@@ -315,19 +397,17 @@ const PaymentsPage = () => {
                     </button>
                     <button
                         onClick={() => {
+                            console.log('=== DEBUG DATA ===');
                             console.log('Clients:', clients);
                             console.log('Documents:', documents);
                             console.log('Payments:', payments);
+                            console.log('Form Data:', formData);
+                            console.log('Filtered Documents (no client):', getFilteredDocuments(''));
+                            console.log('Filtered Documents (with client):', getFilteredDocuments(formData.clientId));
                         }}
                         className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
                     >
                         Debug Data
-                    </button>
-                    <button
-                        onClick={() => setShowAddForm(true)}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
-                    >
-                        Add Payment
                     </button>
                 </div>
             </div>
@@ -337,6 +417,39 @@ const PaymentsPage = () => {
                     {feedback.message}
                 </div>
             )}
+
+            {/* Client Filter */}
+            <div className="bg-white p-4 rounded-lg shadow-lg mb-6">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                        <label className="text-sm font-medium text-gray-700">Filter by Client:</label>
+                        <select
+                            value={clientFilter}
+                            onChange={(e) => setClientFilter(e.target.value)}
+                            className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                            <option value="all">All Clients</option>
+                            {clients.map(client => (
+                                <option key={client.id} value={client.id}>{client.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="flex space-x-2">
+                        <button
+                            onClick={() => setShowClientSettlement(true)}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
+                        >
+                            Client Settlement
+                        </button>
+                        <button
+                            onClick={() => setShowAddForm(true)}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
+                        >
+                            Add Payment
+                        </button>
+                    </div>
+                </div>
+            </div>
 
             {/* Add/Edit Payment Form */}
             {showAddForm && (
@@ -505,7 +618,7 @@ const PaymentsPage = () => {
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {payments.map(payment => {
+                            {getFilteredPayments().map(payment => {
                                 const clientName = getClientName(payment);
                                 const docInfo = getDocumentInfo(payment.documentId);
                                 
@@ -592,6 +705,119 @@ const PaymentsPage = () => {
                             >
                                 {loading ? 'Migrating...' : 'Migrate Now'}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Client Settlement Modal */}
+            {showClientSettlement && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white p-6 rounded-lg shadow-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-semibold text-gray-800">Client Settlement</h2>
+                            <button
+                                onClick={() => {
+                                    setShowClientSettlement(false);
+                                    setSelectedClientForSettlement(null);
+                                }}
+                                className="text-gray-500 hover:text-gray-700"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">Select Client</label>
+                                <select
+                                    value={selectedClientForSettlement?.id || ''}
+                                    onChange={(e) => {
+                                        const client = clients.find(c => c.id === e.target.value);
+                                        setSelectedClientForSettlement(client);
+                                    }}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                >
+                                    <option value="">Select Client</option>
+                                    {clients.map(client => (
+                                        <option key={client.id} value={client.id}>{client.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {selectedClientForSettlement && (
+                                <div className="space-y-4">
+                                    <div className="bg-gray-50 p-4 rounded-lg">
+                                        <h3 className="font-semibold text-gray-800 mb-2">
+                                            Client: {selectedClientForSettlement.name}
+                                        </h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                            <div>
+                                                <span className="text-gray-600">Total Payments:</span>
+                                                <span className="font-semibold ml-2">
+                                                    ${getClientPayments(selectedClientForSettlement.id).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <span className="text-gray-600">Total Documents:</span>
+                                                <span className="font-semibold ml-2">
+                                                    {getClientDocuments(selectedClientForSettlement.id).length}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <span className="text-gray-600">Unpaid Documents:</span>
+                                                <span className="font-semibold ml-2 text-red-600">
+                                                    {getClientDocuments(selectedClientForSettlement.id).filter(doc => (doc.totalPaid || 0) < doc.total).length}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h3 className="font-semibold text-gray-800 mb-2">Settle Documents</h3>
+                                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                                            {getClientDocuments(selectedClientForSettlement.id).map(doc => {
+                                                const outstanding = getOutstandingAmount(doc.id);
+                                                const isPaid = outstanding <= 0;
+                                                const docInfo = getDocumentInfo(doc.id);
+                                                
+                                                return (
+                                                    <div key={doc.id} className={`p-3 border rounded-lg ${isPaid ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}`}>
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center space-x-2">
+                                                                    <span className={`px-2 py-1 text-xs rounded-full ${
+                                                                        doc.type === 'invoice' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                                                                    }`}>
+                                                                        {docInfo.type} #{docInfo.number}
+                                                                    </span>
+                                                                    <span className="text-sm text-gray-600">
+                                                                        Total: ${docInfo.total.toFixed(2)}
+                                                                    </span>
+                                                                    <span className="text-sm text-gray-600">
+                                                                        Paid: ${(doc.totalPaid || 0).toFixed(2)}
+                                                                    </span>
+                                                                    <span className={`text-sm font-semibold ${isPaid ? 'text-green-600' : 'text-orange-600'}`}>
+                                                                        Outstanding: ${outstanding.toFixed(2)}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            {!isPaid && (
+                                                                <button
+                                                                    onClick={() => handleSettleDocument(selectedClientForSettlement.id, doc.id, outstanding)}
+                                                                    className="ml-4 px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                                                                >
+                                                                    Settle ${outstanding.toFixed(2)}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
