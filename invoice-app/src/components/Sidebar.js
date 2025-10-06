@@ -6,9 +6,17 @@ import { COMPANY_INFO } from '../config';
 
 const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
     const [companyName, setCompanyName] = useState(COMPANY_INFO.name);
+    const [userInfo, setUserInfo] = useState({ displayName: '', email: '' });
 
     useEffect(() => {
         if (!auth.currentUser) return;
+        
+        // Get user info from auth
+        setUserInfo({
+            displayName: auth.currentUser.displayName || 'User',
+            email: auth.currentUser.email || ''
+        });
+        
         const settingsRef = doc(db, 'settings', auth.currentUser.uid);
         const unsubscribe = onSnapshot(settingsRef, (docSnap) => {
             if (docSnap.exists()) {
@@ -62,6 +70,25 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-700">
+                {/* User Information */}
+                <div className="mb-4 p-3 bg-gray-700 rounded-lg">
+                    <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 bg-indigo-500 rounded-full flex items-center justify-center">
+                            <span className="text-white font-semibold text-sm">
+                                {userInfo.displayName.charAt(0).toUpperCase()}
+                            </span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-white truncate">
+                                {userInfo.displayName}
+                            </p>
+                            <p className="text-xs text-gray-300 truncate">
+                                {userInfo.email}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                
                 <button
                     onClick={handleLogout}
                     className="w-full text-left flex items-center px-4 py-2 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-700 hover:text-white"
