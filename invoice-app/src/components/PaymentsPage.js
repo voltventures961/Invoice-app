@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { migratePayments, verifyMigration, repairMigratedPayments } from '../utils/paymentMigration';
 
@@ -20,7 +20,7 @@ const PaymentsPage = () => {
         documentId: '',
         amount: '',
         paymentDate: new Date().toISOString().split('T')[0],
-        paymentMethod: 'bank_transfer',
+        paymentMethod: 'cash',
         reference: '',
         notes: ''
     });
@@ -34,8 +34,8 @@ const PaymentsPage = () => {
                     setMigrationStatus(migrationCheck);
                 }
 
-                // Fetch clients
-                const clientsQuery = query(collection(db, 'clients'), orderBy('name'));
+                // Fetch clients from the correct path
+                const clientsQuery = query(collection(db, `clients`), orderBy('name'));
                 const clientsSnapshot = await getDocs(clientsQuery);
                 const clientsData = clientsSnapshot.docs.map(doc => ({
                     id: doc.id,
@@ -52,7 +52,7 @@ const PaymentsPage = () => {
                 }));
                 setDocuments(documentsData);
 
-                // Listen to payments
+                // Listen to payments with limit for better performance
                 const paymentsQuery = query(collection(db, 'payments'), orderBy('paymentDate', 'desc'));
                 const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
                     const paymentsData = snapshot.docs.map(doc => ({
@@ -60,6 +60,9 @@ const PaymentsPage = () => {
                         ...doc.data()
                     }));
                     setPayments(paymentsData);
+                    setLoading(false);
+                }, (error) => {
+                    console.error('Error fetching payments:', error);
                     setLoading(false);
                 });
 
@@ -122,6 +125,28 @@ const PaymentsPage = () => {
         } catch (error) {
             console.error('Repair error:', error);
             setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDeletePayment = async (paymentId, documentId) => {
+        if (!window.confirm('Are you sure you want to delete this payment?')) return;
+        
+        setLoading(true);
+        setFeedback({ type: '', message: '' });
+        
+        try {
+            // Delete the payment
+            await deleteDoc(doc(db, 'payments', paymentId));
+            
+            // Update document payment status
+            await updateDocumentPaymentStatus(documentId);
+            
+            setFeedback({ type: 'success', message: 'Payment deleted successfully!' });
+        } catch (error) {
+            console.error('Error deleting payment:', error);
+            setFeedback({ type: 'error', message: 'Failed to delete payment' });
         } finally {
             setLoading(false);
         }
@@ -204,9 +229,14 @@ const PaymentsPage = () => {
         }
     };
 
-    const getClientName = (clientId) => {
-        const client = clients.find(c => c.id === clientId);
-        return client ? client.name : `Client ID: ${clientId}`;
+    const getClientName = (payment) => {
+        // First try to get from payment data (for migrated payments)
+        if (payment.clientName) {
+            return payment.clientName;
+        }
+        // Then try to find in clients list
+        const client = clients.find(c => c.id === payment.clientId);
+        return client ? client.name : `Client ID: ${payment.clientId}`;
     };
 
     const getDocumentInfo = (documentId) => {
@@ -221,10 +251,41 @@ const PaymentsPage = () => {
     };
 
     const getFilteredDocuments = (clientId) => {
+        if (!clientId) {
+            // Show all active documents if no client selected
+            return documents.filter(doc => 
+                !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
+            );
+        }
         return documents.filter(doc => 
             doc.client && doc.client.id === clientId && 
-            !doc.cancelled && !doc.deleted
+            !doc.cancelled && !doc.deleted && !doc.transformedToInvoice && !doc.convertedToInvoice
         );
+    };
+
+    const getOutstandingAmount = (documentId) => {
+        const document = documents.find(d => d.id === documentId);
+        if (!document) return 0;
+        const totalPaid = document.totalPaid || 0;
+        return Math.max(0, document.total - totalPaid);
+    };
+
+    const handleClientChange = (clientId) => {
+        setFormData(prev => ({
+            ...prev,
+            clientId,
+            documentId: '', // Reset document when client changes
+            amount: '' // Reset amount when client changes
+        }));
+    };
+
+    const handleDocumentChange = (documentId) => {
+        const outstanding = getOutstandingAmount(documentId);
+        setFormData(prev => ({
+            ...prev,
+            documentId,
+            amount: outstanding > 0 ? outstanding.toFixed(2) : ''
+        }));
     };
 
     if (loading) {
@@ -278,7 +339,7 @@ const PaymentsPage = () => {
                                 <select
                                     name="clientId"
                                     value={formData.clientId}
-                                    onChange={handleInputChange}
+                                    onChange={(e) => handleClientChange(e.target.value)}
                                     required
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
@@ -296,16 +357,17 @@ const PaymentsPage = () => {
                                 <select
                                     name="documentId"
                                     value={formData.documentId}
-                                    onChange={handleInputChange}
+                                    onChange={(e) => handleDocumentChange(e.target.value)}
                                     required
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
                                     <option value="">Select Document</option>
-                                    {formData.clientId && getFilteredDocuments(formData.clientId).map(doc => {
+                                    {getFilteredDocuments(formData.clientId).map(doc => {
                                         const docInfo = getDocumentInfo(doc.id);
+                                        const outstanding = getOutstandingAmount(doc.id);
                                         return (
                                             <option key={doc.id} value={doc.id}>
-                                                {docInfo.type} #{docInfo.number} - ${docInfo.total.toFixed(2)}
+                                                {docInfo.type} #{docInfo.number} - ${docInfo.total.toFixed(2)} (Outstanding: ${outstanding.toFixed(2)})
                                             </option>
                                         );
                                     })}
@@ -347,8 +409,8 @@ const PaymentsPage = () => {
                                     onChange={handleInputChange}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
-                                    <option value="bank_transfer">Bank Transfer</option>
                                     <option value="cash">Cash</option>
+                                    <option value="bank_transfer">Bank Transfer</option>
                                     <option value="check">Check</option>
                                     <option value="credit_card">Credit Card</option>
                                     <option value="other">Other</option>
@@ -432,7 +494,7 @@ const PaymentsPage = () => {
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                             {payments.map(payment => {
-                                const clientName = getClientName(payment.clientId);
+                                const clientName = getClientName(payment);
                                 const docInfo = getDocumentInfo(payment.documentId);
                                 
                                 return (
@@ -463,21 +525,29 @@ const PaymentsPage = () => {
                                             {payment.reference || '-'}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                            <button
-                                                onClick={() => {
-                                                    setEditingPayment(payment);
-                                                    setFormData({
-                                                        ...payment,
-                                                        paymentDate: payment.paymentDate?.toDate ? 
-                                                            payment.paymentDate.toDate().toISOString().split('T')[0] :
-                                                            new Date(payment.paymentDate).toISOString().split('T')[0]
-                                                    });
-                                                    setShowAddForm(true);
-                                                }}
-                                                className="text-indigo-600 hover:text-indigo-900 mr-3"
-                                            >
-                                                Edit
-                                            </button>
+                                            <div className="flex space-x-2">
+                                                <button
+                                                    onClick={() => {
+                                                        setEditingPayment(payment);
+                                                        setFormData({
+                                                            ...payment,
+                                                            paymentDate: payment.paymentDate?.toDate ? 
+                                                                payment.paymentDate.toDate().toISOString().split('T')[0] :
+                                                                new Date(payment.paymentDate).toISOString().split('T')[0]
+                                                        });
+                                                        setShowAddForm(true);
+                                                    }}
+                                                    className="text-indigo-600 hover:text-indigo-900"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeletePayment(payment.id, payment.documentId)}
+                                                    className="text-red-600 hover:text-red-900"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 );

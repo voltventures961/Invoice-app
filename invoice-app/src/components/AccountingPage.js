@@ -669,65 +669,6 @@ const AccountingPage = () => {
                 </div>
             </div>
 
-            {/* Financial Strategy Explanation */}
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg shadow-lg mb-8">
-                <h2 className="text-xl font-semibold text-gray-800 mb-4">💰 Financial Strategy Breakdown</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-white p-4 rounded-lg border-l-4 border-green-500">
-                        <h3 className="font-semibold text-green-700 mb-2">✅ Your Profit Sources</h3>
-                        <ul className="text-sm text-gray-600 space-y-1">
-                            <li>• <strong>Items Revenue:</strong> Your profit from selling products</li>
-                            <li>• <strong>Labor Revenue:</strong> Your profit from your own work</li>
-                            <li>• <strong>Display Mandays:</strong> Shown to client, pure profit for you</li>
-                        </ul>
-                    </div>
-                    <div className="bg-white p-4 rounded-lg border-l-4 border-orange-500">
-                        <h3 className="font-semibold text-orange-700 mb-2">💰 Your Costs</h3>
-                        <ul className="text-sm text-gray-600 space-y-1">
-                            <li>• <strong>Real Mandays Cost:</strong> Actual cost to you (hidden from client)</li>
-                            <li>• <strong>Cost of Goods:</strong> What you paid for items you sold</li>
-                        </ul>
-                    </div>
-                    <div className="bg-white p-4 rounded-lg border-l-4 border-blue-500">
-                        <h3 className="font-semibold text-blue-700 mb-2">📊 Key Metrics</h3>
-                        <ul className="text-sm text-gray-600 space-y-1">
-                            <li>• <strong>Net Profit:</strong> Total profit (including unpaid)</li>
-                            <li>• <strong>Collected Profit:</strong> Profit from paid invoices only</li>
-                            <li>• <strong>Profit Margin:</strong> Your profit percentage</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
-            {/* Conversion Summary */}
-            {true && (
-                <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg shadow-lg mb-8">
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">📊 Document Status Summary</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-white p-4 rounded-lg border-l-4 border-green-500">
-                            <h3 className="font-semibold text-green-700 mb-2">✅ Active Documents</h3>
-                            <p className="text-sm text-gray-600">
-                                Showing only active invoices and proformas that haven't been converted or cancelled.
-                                This gives you the most accurate view of your current business performance.
-                            </p>
-                        </div>
-                        <div className="bg-white p-4 rounded-lg border-l-4 border-orange-500">
-                            <h3 className="font-semibold text-orange-700 mb-2">🔄 Converted Proformas</h3>
-                            <p className="text-sm text-gray-600">
-                                Proformas that have been converted to invoices are excluded to prevent double-counting.
-                                Use "Include All" filter to see them if needed.
-                            </p>
-                        </div>
-                        <div className="bg-white p-4 rounded-lg border-l-4 border-blue-500">
-                            <h3 className="font-semibold text-blue-700 mb-2">📈 Accurate Metrics</h3>
-                            <p className="text-sm text-gray-600">
-                                All financial calculations (revenue, profit, costs) are based on active documents only,
-                                ensuring accurate business analysis.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Detailed Transactions */}
             <div className="bg-white p-6 rounded-lg shadow-lg">

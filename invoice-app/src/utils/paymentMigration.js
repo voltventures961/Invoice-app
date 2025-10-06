@@ -210,7 +210,7 @@ export const repairMigratedPayments = async (userId) => {
         });
         
         // Get all clients
-        const clientsQuery = query(collection(db, 'clients'));
+        const clientsQuery = query(collection(db, `clients`));
         const clientsSnapshot = await getDocs(clientsQuery);
         const clientsMap = new Map();
         clientsSnapshot.forEach(doc => {
@@ -226,8 +226,10 @@ export const repairMigratedPayments = async (userId) => {
                 const clientData = clientsMap.get(clientId);
                 
                 if (clientId && clientId !== 'unknown') {
+                    const clientData = clientsMap.get(clientId);
                     const updatedPaymentData = {
                         clientId: clientId,
+                        clientName: clientData?.name || 'Unknown Client',
                         reference: `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
                         updatedAt: new Date(),
                         repaired: true
