@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
-import { migratePayments, verifyMigration } from '../utils/paymentMigration';
+import { migratePayments, verifyMigration, repairMigratedPayments } from '../utils/paymentMigration';
 
 const PaymentsPage = () => {
     const [payments, setPayments] = useState([]);
@@ -43,8 +43,8 @@ const PaymentsPage = () => {
                 }));
                 setClients(clientsData);
 
-                // Fetch documents (invoices and proformas)
-                const documentsQuery = query(collection(db, 'userDocuments'), orderBy('date', 'desc'));
+                // Fetch documents (invoices and proformas) from the correct path
+                const documentsQuery = query(collection(db, `documents/${auth.currentUser.uid}/userDocuments`), orderBy('date', 'desc'));
                 const documentsSnapshot = await getDocs(documentsQuery);
                 const documentsData = documentsSnapshot.docs.map(doc => ({
                     id: doc.id,
@@ -98,6 +98,30 @@ const PaymentsPage = () => {
         } catch (error) {
             console.error('Migration error:', error);
             setFeedback({ type: 'error', message: 'Migration failed. Please try again.' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRepair = async () => {
+        if (!auth.currentUser) return;
+        
+        setLoading(true);
+        setFeedback({ type: '', message: '' });
+        
+        try {
+            const result = await repairMigratedPayments(auth.currentUser.uid);
+            if (result.success) {
+                setFeedback({ 
+                    type: 'success', 
+                    message: `Repair completed successfully! Fixed ${result.repairedCount} payments.` 
+                });
+            } else {
+                setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
+            }
+        } catch (error) {
+            console.error('Repair error:', error);
+            setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -182,7 +206,7 @@ const PaymentsPage = () => {
 
     const getClientName = (clientId) => {
         const client = clients.find(c => c.id === clientId);
-        return client ? client.name : 'Unknown Client';
+        return client ? client.name : `Client ID: ${clientId}`;
     };
 
     const getDocumentInfo = (documentId) => {
@@ -191,7 +215,7 @@ const PaymentsPage = () => {
         
         return {
             type: document.type || 'Invoice',
-            number: document.invoiceNumber || document.proformaNumber || 'N/A',
+            number: document.invoiceNumber || document.proformaNumber || document.documentNumber || 'N/A',
             total: document.total || 0
         };
     };
@@ -220,6 +244,12 @@ const PaymentsPage = () => {
                             Migrate Old Payments
                         </button>
                     )}
+                    <button
+                        onClick={handleRepair}
+                        className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
+                    >
+                        Repair Payments
+                    </button>
                     <button
                         onClick={() => setShowAddForm(true)}
                         className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"

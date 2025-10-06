@@ -104,13 +104,8 @@ const AccountingPage = () => {
             filteredDocs = filteredDocs.filter(doc => doc.type === 'proforma');
         }
         
-        // Apply converted filter
-        if (showConvertedFilter === 'exclude') {
-            filteredDocs = filteredDocs.filter(doc => !doc.convertedToInvoice && !doc.transformedToInvoice);
-        } else if (showConvertedFilter === 'only') {
-            filteredDocs = filteredDocs.filter(doc => doc.convertedToInvoice || doc.transformedToInvoice);
-        }
-        // 'include' shows all documents
+        // Converted proformas are always excluded (no filter needed)
+        // This is handled in the initial document fetching above
             
             // Apply category filter
             if (categoryFilter === 'labor') {
@@ -705,7 +700,7 @@ const AccountingPage = () => {
             </div>
 
             {/* Conversion Summary */}
-            {showConvertedFilter === 'exclude' && (
+            {true && (
                 <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg shadow-lg mb-8">
                     <h2 className="text-xl font-semibold text-gray-800 mb-4">📊 Document Status Summary</h2>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

@@ -27,12 +27,12 @@ export const migratePayments = async (userId) => {
                 // Migrate each payment for this document
                 for (const payment of documentData.payments) {
                     const paymentData = {
-                        clientId: documentData.client?.id || 'unknown',
+                        clientId: documentData.client?.id || documentData.clientId || 'unknown',
                         documentId: documentId,
                         amount: payment.amount || 0,
                         paymentDate: payment.date || payment.timestamp || new Date(),
                         paymentMethod: 'migrated',
-                        reference: `Migrated from ${documentData.type || 'document'}`,
+                        reference: `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
                         notes: payment.note || 'Migrated payment',
                         createdAt: payment.timestamp || new Date(),
                         updatedAt: new Date(),
@@ -181,6 +181,69 @@ export const rollbackMigration = async (userId) => {
         
     } catch (error) {
         console.error('Rollback failed:', error);
+        return { success: false, error: error.message };
+    }
+};
+
+// Repair function to fix migrated payments with missing client/document data
+export const repairMigratedPayments = async (userId) => {
+    try {
+        console.log('Starting payment repair...');
+        
+        // Get all migrated payments
+        const paymentsQuery = query(
+            collection(db, 'payments'),
+            where('migrated', '==', true)
+        );
+        
+        const paymentsSnapshot = await getDocs(paymentsQuery);
+        let repairedCount = 0;
+        
+        // Get all documents to match with payments
+        const documentsQuery = query(
+            collection(db, `documents/${userId}/userDocuments`)
+        );
+        const documentsSnapshot = await getDocs(documentsQuery);
+        const documentsMap = new Map();
+        documentsSnapshot.forEach(doc => {
+            documentsMap.set(doc.id, doc.data());
+        });
+        
+        // Get all clients
+        const clientsQuery = query(collection(db, 'clients'));
+        const clientsSnapshot = await getDocs(clientsQuery);
+        const clientsMap = new Map();
+        clientsSnapshot.forEach(doc => {
+            clientsMap.set(doc.id, doc.data());
+        });
+        
+        for (const paymentDoc of paymentsSnapshot.docs) {
+            const payment = paymentDoc.data();
+            const documentData = documentsMap.get(payment.documentId);
+            
+            if (documentData) {
+                const clientId = documentData.client?.id || documentData.clientId;
+                const clientData = clientsMap.get(clientId);
+                
+                if (clientId && clientId !== 'unknown') {
+                    const updatedPaymentData = {
+                        clientId: clientId,
+                        reference: `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
+                        updatedAt: new Date(),
+                        repaired: true
+                    };
+                    
+                    await updateDoc(doc(db, 'payments', paymentDoc.id), updatedPaymentData);
+                    repairedCount++;
+                }
+            }
+        }
+        
+        console.log(`Payment repair completed. Repaired ${repairedCount} payments.`);
+        return { success: true, repairedCount };
+        
+    } catch (error) {
+        console.error('Payment repair failed:', error);
         return { success: false, error: error.message };
     }
 };
