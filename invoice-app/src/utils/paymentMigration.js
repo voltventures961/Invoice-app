@@ -5,29 +5,45 @@ import { db } from '../firebase/config';
 export const migratePayments = async (userId) => {
     try {
         console.log('Starting SAFE payment migration...');
-        
+
         // Get all documents with payments
         const documentsQuery = query(
             collection(db, `documents/${userId}/userDocuments`),
             where('payments', '!=', null)
         );
-        
+
         const documentsSnapshot = await getDocs(documentsQuery);
         let migratedCount = 0;
+        let skippedProformas = 0;
         const migrationResults = [];
-        
+
         // STEP 1: Migrate all payments first (without clearing old data)
+        // IMPORTANT: Skip proformas as payments should not be on proformas
         for (const docSnapshot of documentsSnapshot.docs) {
             const documentData = docSnapshot.data();
             const documentId = docSnapshot.id;
-            
+
+            // Skip proformas - payments on proformas should have been moved when converted to invoice
+            if (documentData.type === 'proforma') {
+                console.log(`Skipping proforma ${documentId} - proformas should not have payments`);
+                skippedProformas++;
+                continue;
+            }
+
             if (documentData.payments && Array.isArray(documentData.payments) && documentData.payments.length > 0) {
                 const documentPayments = [];
-                
+                const clientId = documentData.client?.id || documentData.clientId;
+
+                // Validate client exists before migrating
+                if (!clientId || clientId === 'unknown') {
+                    console.warn(`Skipping document ${documentId} - no valid client ID`);
+                    continue;
+                }
+
                 // Migrate each payment for this document
                 for (const payment of documentData.payments) {
                     const paymentData = {
-                        clientId: documentData.client?.id || documentData.clientId || 'unknown',
+                        clientId: clientId,
                         documentId: documentId,
                         amount: payment.amount || 0,
                         paymentDate: payment.date || payment.timestamp || new Date(),
@@ -36,53 +52,61 @@ export const migratePayments = async (userId) => {
                         notes: payment.note || 'Migrated payment',
                         createdAt: payment.timestamp || new Date(),
                         updatedAt: new Date(),
-                        migrated: true
+                        migrated: true,
+                        settledToDocument: true // Payment is already allocated to a specific document
                     };
-                    
+
                     const newPaymentRef = await addDoc(collection(db, 'payments'), paymentData);
                     documentPayments.push(newPaymentRef.id);
                     migratedCount++;
                 }
-                
+
+                // Calculate total paid from payments
+                const totalPaid = documentData.payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
                 // Store migration result for verification
                 migrationResults.push({
                     documentId,
+                    documentType: documentData.type,
                     originalPaymentsCount: documentData.payments.length,
-                    migratedPaymentIds: documentPayments
+                    migratedPaymentIds: documentPayments,
+                    totalPaid: totalPaid
                 });
             }
         }
-        
+
         // STEP 2: Verify migration was successful
         console.log('Verifying migration...');
         const verification = await verifyMigration(userId);
-        
+
         if (!verification.success) {
             throw new Error('Migration verification failed');
         }
-        
+
         // STEP 3: Only clear old payments if migration was successful
         if (migrationResults.length > 0) {
-            console.log('Migration successful, clearing old payment data...');
-            
+            console.log('Migration successful, updating documents...');
+
             for (const result of migrationResults) {
                 await updateDoc(doc(db, `documents/${userId}/userDocuments`, result.documentId), {
                     payments: [], // Clear old payments
+                    totalPaid: result.totalPaid, // Set total paid amount
                     migrationCompleted: true,
                     migrationDate: new Date(),
                     migratedPaymentCount: result.originalPaymentsCount
                 });
             }
         }
-        
-        console.log(`SAFE Migration completed. Migrated ${migratedCount} payments from ${migrationResults.length} documents.`);
-        return { 
-            success: true, 
-            migratedCount, 
+
+        console.log(`SAFE Migration completed. Migrated ${migratedCount} payments from ${migrationResults.length} documents. Skipped ${skippedProformas} proformas.`);
+        return {
+            success: true,
+            migratedCount,
             documentsProcessed: migrationResults.length,
+            skippedProformas,
             verification: verification
         };
-        
+
     } catch (error) {
         console.error('Migration failed:', error);
         return { success: false, error: error.message };

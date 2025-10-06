@@ -10,11 +10,6 @@ const InvoicesPage = ({ navigateTo }) => {
     const [displayLimit, setDisplayLimit] = useState(20);
     const [showCancelledModal, setShowCancelledModal] = useState(false);
     const [confirmCancel, setConfirmCancel] = useState(null);
-    const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [selectedInvoice, setSelectedInvoice] = useState(null);
-    const [paymentAmount, setPaymentAmount] = useState('');
-    const [paymentNote, setPaymentNote] = useState('');
-    const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -300,18 +295,22 @@ const InvoicesPage = ({ navigateTo }) => {
                                             </td>
                                             <td className="py-3 px-6 text-center">
                                                 <div className="flex item-center justify-center gap-1">
-                                                    <button 
-                                                        onClick={() => navigateTo('viewDocument', doc)} 
+                                                    <button
+                                                        onClick={() => navigateTo('viewDocument', doc)}
                                                         className="text-gray-600 hover:text-indigo-600 font-medium py-1 px-2 rounded-lg text-sm"
                                                     >
                                                         View
                                                     </button>
                                                     {remaining > 0 && (
-                                                        <button 
-                                                            onClick={() => openPaymentModal(doc)} 
+                                                        <button
+                                                            onClick={() => {
+                                                                // Redirect to Payments page for unified payment management
+                                                                navigateTo('payments');
+                                                            }}
                                                             className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
+                                                            title="Go to Payments page to add payment"
                                                         >
-                                                            Pay
+                                                            Add Payment
                                                         </button>
                                                     )}
                                                     <button 

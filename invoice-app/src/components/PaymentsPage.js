@@ -22,7 +22,8 @@ const PaymentsPage = () => {
         paymentDate: new Date().toISOString().split('T')[0],
         paymentMethod: 'cash',
         reference: '',
-        notes: ''
+        notes: '',
+        paymentType: 'toDocument' // 'toDocument' or 'toClient' (unallocated)
     });
     const [clientFilter, setClientFilter] = useState('all'); // Filter payments by client
     const [showClientSettlement, setShowClientSettlement] = useState(false);
@@ -170,8 +171,15 @@ const PaymentsPage = () => {
 
         try {
             // Validate required fields
-            if (!formData.clientId || !formData.documentId || !formData.amount) {
-                setFeedback({ type: 'error', message: 'Please fill in all required fields.' });
+            if (!formData.clientId || !formData.amount) {
+                setFeedback({ type: 'error', message: 'Please select a client and enter an amount.' });
+                setLoading(false);
+                return;
+            }
+
+            // For toDocument type, document is required
+            if (formData.paymentType === 'toDocument' && !formData.documentId) {
+                setFeedback({ type: 'error', message: 'Please select a document for document-specific payment.' });
                 setLoading(false);
                 return;
             }
@@ -183,9 +191,14 @@ const PaymentsPage = () => {
             }
 
             const paymentData = {
-                ...formData,
+                clientId: formData.clientId,
+                documentId: formData.paymentType === 'toDocument' ? formData.documentId : null,
                 amount: parseFloat(formData.amount),
                 paymentDate: new Date(formData.paymentDate),
+                paymentMethod: formData.paymentMethod,
+                reference: formData.reference,
+                notes: formData.notes,
+                settledToDocument: formData.paymentType === 'toDocument', // true if allocated to document, false if on client account
                 createdAt: new Date(),
                 updatedAt: new Date()
             };
@@ -198,11 +211,18 @@ const PaymentsPage = () => {
             } else {
                 // Add new payment
                 await addDoc(collection(db, 'payments'), paymentData);
-                setFeedback({ type: 'success', message: 'Payment added successfully!' });
+
+                if (formData.paymentType === 'toDocument') {
+                    setFeedback({ type: 'success', message: 'Payment added and allocated to invoice successfully!' });
+                } else {
+                    setFeedback({ type: 'success', message: 'Payment added to client account successfully!' });
+                }
             }
 
-            // Update document payment status
-            await updateDocumentPaymentStatus(formData.documentId);
+            // Update document payment status if payment is allocated to document
+            if (formData.paymentType === 'toDocument' && formData.documentId) {
+                await updateDocumentPaymentStatus(formData.documentId);
+            }
 
             // Reset form
             setFormData({
@@ -212,7 +232,8 @@ const PaymentsPage = () => {
                 paymentDate: new Date().toISOString().split('T')[0],
                 paymentMethod: 'cash',
                 reference: '',
-                notes: ''
+                notes: '',
+                paymentType: 'toDocument'
             });
             setShowAddForm(false);
             setEditingPayment(null);
@@ -270,26 +291,30 @@ const PaymentsPage = () => {
     };
 
     const getFilteredDocuments = (clientId) => {
+        // IMPORTANT: Only show invoices for payment allocation (not proformas)
+        // Proformas should not have payments - payments should be added to client account instead
         if (!clientId) {
-            // Show all active documents if no client selected
-            // Exclude converted proformas to avoid double counting
-            const filtered = documents.filter(doc => 
-                !doc.cancelled && 
-                !doc.deleted && 
-                !doc.transformedToInvoice && 
+            // Show all active invoices if no client selected
+            const filtered = documents.filter(doc =>
+                doc.type === 'invoice' && // Only invoices
+                !doc.cancelled &&
+                !doc.deleted &&
+                !doc.transformedToInvoice &&
                 !doc.convertedToInvoice &&
-                !doc.converted // Also exclude converted proformas
+                !doc.converted
             );
             return filtered;
         }
-        
-        const filtered = documents.filter(doc => 
-            doc.client && doc.client.id === clientId && 
-            !doc.cancelled && 
-            !doc.deleted && 
-            !doc.transformedToInvoice && 
+
+        // Show only invoices for the selected client
+        const filtered = documents.filter(doc =>
+            doc.type === 'invoice' && // Only invoices
+            doc.client && doc.client.id === clientId &&
+            !doc.cancelled &&
+            !doc.deleted &&
+            !doc.transformedToInvoice &&
             !doc.convertedToInvoice &&
-            !doc.converted // Also exclude converted proformas
+            !doc.converted
         );
         return filtered;
     };
@@ -306,14 +331,38 @@ const PaymentsPage = () => {
     };
 
     const getClientDocuments = (clientId) => {
-        return documents.filter(doc => 
-            doc.client && doc.client.id === clientId && 
-            !doc.cancelled && 
-            !doc.deleted && 
-            !doc.transformedToInvoice && 
+        // Only return invoices (not proformas)
+        return documents.filter(doc =>
+            doc.type === 'invoice' && // Only invoices
+            doc.client && doc.client.id === clientId &&
+            !doc.cancelled &&
+            !doc.deleted &&
+            !doc.transformedToInvoice &&
             !doc.convertedToInvoice &&
-            !doc.converted // Exclude converted proformas
+            !doc.converted
         );
+    };
+
+    // Calculate client account balance (unallocated payments - unpaid invoices)
+    const getClientAccountBalance = (clientId) => {
+        // Get all payments for this client
+        const clientPayments = payments.filter(payment => payment.clientId === clientId);
+
+        // Sum unallocated payments (payments not settled to any document)
+        const unallocatedPayments = clientPayments
+            .filter(payment => !payment.settledToDocument)
+            .reduce((sum, payment) => sum + payment.amount, 0);
+
+        return unallocatedPayments;
+    };
+
+    // Get total outstanding amount for a client (across all invoices)
+    const getClientOutstandingAmount = (clientId) => {
+        const clientDocs = getClientDocuments(clientId);
+        return clientDocs.reduce((sum, doc) => {
+            const outstanding = doc.total - (doc.totalPaid || 0);
+            return sum + Math.max(0, outstanding);
+        }, 0);
     };
 
     const getOutstandingAmount = (documentId) => {
@@ -344,29 +393,44 @@ const PaymentsPage = () => {
     const handleSettleDocument = async (clientId, documentId, amount) => {
         try {
             setLoading(true);
-            
+
+            // Check if client has enough unallocated balance
+            const clientBalance = getClientAccountBalance(clientId);
+            const settleAmount = parseFloat(amount);
+
+            if (clientBalance < settleAmount) {
+                setFeedback({
+                    type: 'error',
+                    message: `Insufficient client balance. Available: $${clientBalance.toFixed(2)}, Required: $${settleAmount.toFixed(2)}`
+                });
+                setLoading(false);
+                return;
+            }
+
+            // Create a new payment that settles this invoice from client account
             const paymentData = {
                 clientId: clientId,
                 documentId: documentId,
-                amount: parseFloat(amount),
+                amount: settleAmount,
                 paymentDate: new Date(),
                 paymentMethod: 'settlement',
-                reference: `Settlement payment`,
-                notes: 'Settlement from client account',
+                reference: `Settlement from client account`,
+                notes: 'Invoice settled from client account balance',
+                settledToDocument: true,
                 createdAt: new Date(),
                 updatedAt: new Date()
             };
 
             await addDoc(collection(db, 'payments'), paymentData);
             await updateDocumentPaymentStatus(documentId);
-            
-            setFeedback({ type: 'success', message: 'Document settled successfully!' });
+
+            setFeedback({ type: 'success', message: 'Invoice settled successfully from client account!' });
             setShowClientSettlement(false);
             setSelectedClientForSettlement(null);
-            
+
         } catch (error) {
             console.error('Error settling document:', error);
-            setFeedback({ type: 'error', message: 'Failed to settle document. Please try again.' });
+            setFeedback({ type: 'error', message: 'Failed to settle invoice. Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -446,7 +510,7 @@ const PaymentsPage = () => {
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Client *</label>
                                 <select
                                     name="clientId"
                                     value={formData.clientId}
@@ -455,35 +519,59 @@ const PaymentsPage = () => {
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
                                     <option value="">Select Client</option>
-                                    {clients.map(client => (
-                                        <option key={client.id} value={client.id}>
-                                            {client.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Document</label>
-                                <select
-                                    name="documentId"
-                                    value={formData.documentId}
-                                    onChange={(e) => handleDocumentChange(e.target.value)}
-                                    required
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                >
-                                    <option value="">Select Document</option>
-                                    {getFilteredDocuments(formData.clientId).map(doc => {
-                                        const docInfo = getDocumentInfo(doc.id);
-                                        const outstanding = getOutstandingAmount(doc.id);
+                                    {clients.map(client => {
+                                        const balance = getClientAccountBalance(client.id);
                                         return (
-                                            <option key={doc.id} value={doc.id}>
-                                                {docInfo.type} #{docInfo.number} - ${docInfo.total.toFixed(2)} (Outstanding: ${outstanding.toFixed(2)})
+                                            <option key={client.id} value={client.id}>
+                                                {client.name} {balance > 0 ? `(Balance: $${balance.toFixed(2)})` : ''}
                                             </option>
                                         );
                                     })}
                                 </select>
                             </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type *</label>
+                                <select
+                                    name="paymentType"
+                                    value={formData.paymentType}
+                                    onChange={handleInputChange}
+                                    required
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                >
+                                    <option value="toDocument">Pay Specific Invoice</option>
+                                    <option value="toClient">Add to Client Account (Unallocated)</option>
+                                </select>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    {formData.paymentType === 'toDocument'
+                                        ? 'Payment will be allocated directly to an invoice'
+                                        : 'Payment will be added to client account for later allocation'}
+                                </p>
+                            </div>
+
+                            {formData.paymentType === 'toDocument' && (
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Invoice *</label>
+                                    <select
+                                        name="documentId"
+                                        value={formData.documentId}
+                                        onChange={(e) => handleDocumentChange(e.target.value)}
+                                        required={formData.paymentType === 'toDocument'}
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    >
+                                        <option value="">Select Invoice</option>
+                                        {getFilteredDocuments(formData.clientId).map(doc => {
+                                            const docInfo = getDocumentInfo(doc.id);
+                                            const outstanding = getOutstandingAmount(doc.id);
+                                            return (
+                                                <option key={doc.id} value={doc.id}>
+                                                    {docInfo.type} #{docInfo.number} - ${docInfo.total.toFixed(2)} (Outstanding: ${outstanding.toFixed(2)})
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
@@ -596,7 +684,8 @@ const PaymentsPage = () => {
                             <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Client</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Document</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Method</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
@@ -606,13 +695,14 @@ const PaymentsPage = () => {
                         <tbody className="bg-white divide-y divide-gray-200">
                             {getFilteredPayments().map(payment => {
                                 const clientName = getClientName(payment);
-                                const docInfo = getDocumentInfo(payment.documentId);
-                                
+                                const docInfo = payment.documentId ? getDocumentInfo(payment.documentId) : null;
+                                const isAllocated = payment.settledToDocument;
+
                                 return (
                                     <tr key={payment.id} className="hover:bg-gray-50">
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                            {payment.paymentDate?.toDate ? 
-                                                payment.paymentDate.toDate().toLocaleDateString() : 
+                                            {payment.paymentDate?.toDate ?
+                                                payment.paymentDate.toDate().toLocaleDateString() :
                                                 new Date(payment.paymentDate).toLocaleDateString()
                                             }
                                         </td>
@@ -621,10 +711,21 @@ const PaymentsPage = () => {
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                             <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                                                docInfo.type === 'Invoice' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                                                isAllocated ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
                                             }`}>
-                                                {docInfo.type} #{docInfo.number}
+                                                {isAllocated ? 'Invoice Payment' : 'Client Account'}
                                             </span>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                            {docInfo ? (
+                                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                                    docInfo.type === 'Invoice' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                                                }`}>
+                                                    {docInfo.type} #{docInfo.number}
+                                                </span>
+                                            ) : (
+                                                <span className="text-gray-400">-</span>
+                                            )}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                                             ${payment.amount.toFixed(2)}
@@ -641,10 +742,16 @@ const PaymentsPage = () => {
                                                     onClick={() => {
                                                         setEditingPayment(payment);
                                                         setFormData({
-                                                            ...payment,
-                                                            paymentDate: payment.paymentDate?.toDate ? 
+                                                            clientId: payment.clientId,
+                                                            documentId: payment.documentId || '',
+                                                            amount: payment.amount,
+                                                            paymentDate: payment.paymentDate?.toDate ?
                                                                 payment.paymentDate.toDate().toISOString().split('T')[0] :
-                                                                new Date(payment.paymentDate).toISOString().split('T')[0]
+                                                                new Date(payment.paymentDate).toISOString().split('T')[0],
+                                                            paymentMethod: payment.paymentMethod,
+                                                            reference: payment.reference || '',
+                                                            notes: payment.notes || '',
+                                                            paymentType: payment.settledToDocument ? 'toDocument' : 'toClient'
                                                         });
                                                         setShowAddForm(true);
                                                     }}
@@ -737,25 +844,34 @@ const PaymentsPage = () => {
                                         <h3 className="font-semibold text-gray-800 mb-2">
                                             Client: {selectedClientForSettlement.name}
                                         </h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
                                             <div>
-                                                <span className="text-gray-600">Total Payments:</span>
-                                                <span className="font-semibold ml-2">
-                                                    ${getClientPayments(selectedClientForSettlement.id).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                                                <span className="text-gray-600">Account Balance:</span>
+                                                <span className="font-bold ml-2 text-green-600">
+                                                    ${getClientAccountBalance(selectedClientForSettlement.id).toFixed(2)}
                                                 </span>
                                             </div>
                                             <div>
-                                                <span className="text-gray-600">Total Documents:</span>
+                                                <span className="text-gray-600">Total Outstanding:</span>
+                                                <span className="font-semibold ml-2 text-red-600">
+                                                    ${getClientOutstandingAmount(selectedClientForSettlement.id).toFixed(2)}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <span className="text-gray-600">Total Invoices:</span>
                                                 <span className="font-semibold ml-2">
                                                     {getClientDocuments(selectedClientForSettlement.id).length}
                                                 </span>
                                             </div>
                                             <div>
-                                                <span className="text-gray-600">Unpaid Documents:</span>
-                                                <span className="font-semibold ml-2 text-red-600">
+                                                <span className="text-gray-600">Unpaid Invoices:</span>
+                                                <span className="font-semibold ml-2 text-orange-600">
                                                     {getClientDocuments(selectedClientForSettlement.id).filter(doc => (doc.totalPaid || 0) < doc.total).length}
                                                 </span>
                                             </div>
+                                        </div>
+                                        <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                                            <strong>Note:</strong> Account balance represents unallocated payments that can be used to settle invoices.
                                         </div>
                                     </div>
 
