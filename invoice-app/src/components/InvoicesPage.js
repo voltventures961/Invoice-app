@@ -33,7 +33,12 @@ const InvoicesPage = ({ navigateTo }) => {
                 }
             });
             
-            activeDocs.sort((a, b) => b.date.toDate() - a.date.toDate());
+            // Sort by conversion date (newest converted first), then by creation date
+            activeDocs.sort((a, b) => {
+                const dateA = a.convertedAt?.toDate ? a.convertedAt.toDate() : a.date.toDate();
+                const dateB = b.convertedAt?.toDate ? b.convertedAt.toDate() : b.date.toDate();
+                return dateB - dateA;
+            });
             cancelledDocs.sort((a, b) => (b.cancelledAt?.toDate() || new Date()) - (a.cancelledAt?.toDate() || new Date()));
             
             setInvoices(activeDocs);
@@ -191,18 +196,19 @@ const InvoicesPage = ({ navigateTo }) => {
         const search = searchQuery.toLowerCase();
         const dateStr = doc.date.toDate().toLocaleDateString();
         const paymentStatus = getPaymentStatus(doc);
-        
+
         return (
             doc.documentNumber.toLowerCase().includes(search) ||
             doc.client.name.toLowerCase().includes(search) ||
             dateStr.includes(search) ||
             doc.total.toString().includes(search) ||
-            paymentStatus.label.toLowerCase().includes(search)
+            paymentStatus.label.toLowerCase().includes(search) ||
+            (doc.proformaNumber && doc.proformaNumber.toLowerCase().includes(search))
         );
     });
 
-    // Limit displayed invoices
-    const displayedInvoices = filteredInvoices.slice(0, displayLimit);
+    // If searching, show all results; otherwise limit to displayLimit (default 20)
+    const displayedInvoices = searchQuery ? filteredInvoices : filteredInvoices.slice(0, displayLimit);
 
     // Calculate statistics
     const totalAmount = displayedInvoices.reduce((sum, doc) => sum + doc.total, 0);
@@ -330,14 +336,14 @@ const InvoicesPage = ({ navigateTo }) => {
                     )}
                 </div>
                 
-                {/* Show More Button */}
-                {filteredInvoices.length > displayLimit && (
+                {/* Load More Button - only show when not searching */}
+                {!searchQuery && filteredInvoices.length > displayLimit && (
                     <div className="mt-4 text-center">
                         <button
                             onClick={() => setDisplayLimit(prev => prev + 20)}
-                            className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg"
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-lg transition-colors"
                         >
-                            Show More ({filteredInvoices.length - displayLimit} remaining)
+                            Load More Invoices ({filteredInvoices.length - displayLimit} remaining)
                         </button>
                     </div>
                 )}

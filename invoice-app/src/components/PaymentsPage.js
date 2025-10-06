@@ -30,6 +30,27 @@ const PaymentsPage = () => {
     const [selectedClientForSettlement, setSelectedClientForSettlement] = useState(null);
     const [showClientBalances, setShowClientBalances] = useState(false);
     const [clientSearchTerm, setClientSearchTerm] = useState('');
+    const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
+    const [selectedClient, setSelectedClient] = useState(null);
+    const clientDropdownRef = React.useRef(null);
+    const [selectedPaymentForView, setSelectedPaymentForView] = useState(null);
+    const [showPaymentReceipt, setShowPaymentReceipt] = useState(false);
+    const [paymentSearchTerm, setPaymentSearchTerm] = useState('');
+    const [displayedPaymentsLimit, setDisplayedPaymentsLimit] = useState(20);
+
+    // Handle click outside client dropdown
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target)) {
+                setIsClientDropdownVisible(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -179,12 +200,8 @@ const PaymentsPage = () => {
                 return;
             }
 
-            // For toDocument type, document is required
-            if (formData.paymentType === 'toDocument' && !formData.documentId) {
-                setFeedback({ type: 'error', message: 'Please select a document for document-specific payment.' });
-                setLoading(false);
-                return;
-            }
+            // Payment type is auto-detected: if documentId exists, it's toDocument, otherwise toClient
+            const paymentType = formData.documentId ? 'toDocument' : 'toClient';
 
             if (parseFloat(formData.amount) <= 0) {
                 setFeedback({ type: 'error', message: 'Payment amount must be greater than 0.' });
@@ -194,13 +211,13 @@ const PaymentsPage = () => {
 
             const paymentData = {
                 clientId: formData.clientId,
-                documentId: formData.paymentType === 'toDocument' ? formData.documentId : null,
+                documentId: paymentType === 'toDocument' ? formData.documentId : null,
                 amount: parseFloat(formData.amount),
                 paymentDate: new Date(formData.paymentDate),
                 paymentMethod: formData.paymentMethod,
                 reference: formData.reference,
                 notes: formData.notes,
-                settledToDocument: formData.paymentType === 'toDocument', // true if allocated to document, false if on client account
+                settledToDocument: paymentType === 'toDocument', // true if allocated to document, false if on client account
                 createdAt: new Date(),
                 updatedAt: new Date()
             };
@@ -214,7 +231,7 @@ const PaymentsPage = () => {
                 // Add new payment
                 await addDoc(collection(db, 'payments'), paymentData);
 
-                if (formData.paymentType === 'toDocument') {
+                if (paymentType === 'toDocument') {
                     setFeedback({ type: 'success', message: 'Payment added and allocated to invoice successfully!' });
                 } else {
                     setFeedback({ type: 'success', message: 'Payment added to client account successfully!' });
@@ -222,7 +239,7 @@ const PaymentsPage = () => {
             }
 
             // Update document payment status if payment is allocated to document
-            if (formData.paymentType === 'toDocument' && formData.documentId) {
+            if (paymentType === 'toDocument' && formData.documentId) {
                 await updateDocumentPaymentStatus(formData.documentId);
             }
 
@@ -237,6 +254,8 @@ const PaymentsPage = () => {
                 notes: '',
                 paymentType: 'toDocument'
             });
+            setSelectedClient(null);
+            setClientSearchTerm('');
             setShowAddForm(false);
             setEditingPayment(null);
         } catch (error) {
@@ -333,10 +352,46 @@ const PaymentsPage = () => {
     };
 
     const getFilteredPayments = () => {
-        if (clientFilter === 'all') {
-            return payments;
+        let filtered = payments;
+
+        // Filter by client if selected
+        if (clientFilter !== 'all') {
+            filtered = filtered.filter(payment => payment.clientId === clientFilter);
         }
-        return payments.filter(payment => payment.clientId === clientFilter);
+
+        // Filter by search term if provided
+        if (paymentSearchTerm) {
+            const search = paymentSearchTerm.toLowerCase();
+            filtered = filtered.filter(payment => {
+                const clientName = getClientName(payment).toLowerCase();
+                const docInfo = payment.documentId ? getDocumentInfo(payment.documentId) : null;
+                const amount = payment.amount.toString();
+                const method = payment.paymentMethod.toLowerCase();
+                const reference = (payment.reference || '').toLowerCase();
+                const notes = (payment.notes || '').toLowerCase();
+
+                return clientName.includes(search) ||
+                       amount.includes(search) ||
+                       method.includes(search) ||
+                       reference.includes(search) ||
+                       notes.includes(search) ||
+                       (docInfo && docInfo.number.toLowerCase().includes(search));
+            });
+        }
+
+        // Sort by date (newest first)
+        filtered.sort((a, b) => {
+            const dateA = a.paymentDate?.toDate ? a.paymentDate.toDate() : new Date(a.paymentDate);
+            const dateB = b.paymentDate?.toDate ? b.paymentDate.toDate() : new Date(b.paymentDate);
+            return dateB - dateA;
+        });
+
+        // If no search term, limit to first 20, otherwise show all search results
+        if (!paymentSearchTerm) {
+            return filtered.slice(0, displayedPaymentsLimit);
+        }
+
+        return filtered;
     };
 
     const getClientPayments = (clientId) => {
@@ -420,24 +475,85 @@ const PaymentsPage = () => {
                 return;
             }
 
-            // Create a new payment that settles this invoice from client account
-            const paymentData = {
-                clientId: clientId,
-                documentId: documentId,
-                amount: settleAmount,
-                paymentDate: new Date(),
-                paymentMethod: 'settlement',
-                reference: `Settlement from client account`,
-                notes: 'Invoice settled from client account balance',
-                settledToDocument: true,
-                createdAt: new Date(),
-                updatedAt: new Date()
-            };
+            // Get unallocated payments for this client
+            const clientPayments = payments.filter(p => p.clientId === clientId && !p.settledToDocument);
 
-            await addDoc(collection(db, 'payments'), paymentData);
+            // Sort by date (oldest first)
+            clientPayments.sort((a, b) => {
+                const dateA = a.paymentDate?.toDate ? a.paymentDate.toDate() : new Date(a.paymentDate);
+                const dateB = b.paymentDate?.toDate ? b.paymentDate.toDate() : new Date(b.paymentDate);
+                return dateA - dateB;
+            });
+
+            // Allocate payments to this invoice (FIFO - First In First Out)
+            let remainingToSettle = settleAmount;
+            const paymentsToUpdate = [];
+
+            for (const payment of clientPayments) {
+                if (remainingToSettle <= 0) break;
+
+                const amountToAllocate = Math.min(payment.amount, remainingToSettle);
+
+                if (amountToAllocate === payment.amount) {
+                    // Full payment allocated to this invoice
+                    paymentsToUpdate.push({
+                        id: payment.id,
+                        updates: {
+                            documentId: documentId,
+                            settledToDocument: true,
+                            settledAt: new Date(),
+                            reference: payment.reference || `Settled to invoice`,
+                            notes: (payment.notes || '') + ` | Allocated to invoice ${documentId}`,
+                            updatedAt: new Date()
+                        }
+                    });
+                    remainingToSettle -= amountToAllocate;
+                } else {
+                    // Partial payment - need to split
+                    // Update original payment to allocated portion
+                    paymentsToUpdate.push({
+                        id: payment.id,
+                        updates: {
+                            amount: amountToAllocate,
+                            documentId: documentId,
+                            settledToDocument: true,
+                            settledAt: new Date(),
+                            reference: payment.reference || `Settled to invoice`,
+                            notes: (payment.notes || '') + ` | Partially allocated to invoice`,
+                            updatedAt: new Date()
+                        }
+                    });
+
+                    // Create new payment for remaining unallocated amount
+                    const remainingUnallocated = payment.amount - amountToAllocate;
+                    const newPaymentData = {
+                        ...payment,
+                        amount: remainingUnallocated,
+                        settledToDocument: false,
+                        documentId: null,
+                        notes: (payment.notes || '') + ` | Split from original payment`,
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    };
+                    delete newPaymentData.id;
+                    await addDoc(collection(db, 'payments'), newPaymentData);
+
+                    remainingToSettle = 0;
+                }
+            }
+
+            // Update all allocated payments
+            for (const paymentUpdate of paymentsToUpdate) {
+                await updateDoc(doc(db, 'payments', paymentUpdate.id), paymentUpdate.updates);
+            }
+
+            // Update document payment status
             await updateDocumentPaymentStatus(documentId);
 
-            setFeedback({ type: 'success', message: 'Invoice settled successfully from client account!' });
+            setFeedback({
+                type: 'success',
+                message: `Invoice settled successfully! Allocated ${paymentsToUpdate.length} payment(s) from client account.`
+            });
             setShowClientSettlement(false);
             setSelectedClientForSettlement(null);
 
@@ -521,83 +637,102 @@ const PaymentsPage = () => {
                         {editingPayment ? 'Edit Payment' : 'Add New Payment'}
                     </h2>
                     <form onSubmit={handleSubmit} className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
+                        <div className="grid grid-cols-1 gap-4">
+                            <div ref={clientDropdownRef}>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Client *</label>
-                                <input
-                                    type="text"
-                                    placeholder="Search clients..."
-                                    value={clientSearchTerm}
-                                    onChange={(e) => setClientSearchTerm(e.target.value)}
-                                    className="w-full px-3 py-2 mb-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                />
-                                <select
-                                    name="clientId"
-                                    value={formData.clientId}
-                                    onChange={(e) => handleClientChange(e.target.value)}
-                                    required
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                    size="5"
-                                >
-                                    <option value="">Select Client</option>
-                                    {clients
-                                        .filter(client =>
-                                            client.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
-                                            client.email?.toLowerCase().includes(clientSearchTerm.toLowerCase())
-                                        )
-                                        .map(client => {
-                                            const balance = getClientAccountBalance(client.id);
-                                            return (
-                                                <option key={client.id} value={client.id}>
-                                                    {client.name} {balance > 0 ? `(Balance: $${balance.toFixed(2)})` : ''}
-                                                </option>
-                                            );
-                                        })}
-                                </select>
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        placeholder="Search clients by name, email, or location..."
+                                        value={selectedClient ? selectedClient.name : clientSearchTerm}
+                                        onChange={(e) => {
+                                            setClientSearchTerm(e.target.value);
+                                            setSelectedClient(null);
+                                            setFormData(prev => ({ ...prev, clientId: '', documentId: '' }));
+                                            setIsClientDropdownVisible(true);
+                                        }}
+                                        onFocus={() => setIsClientDropdownVisible(true)}
+                                        required
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                    {isClientDropdownVisible && (
+                                        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                                            {clients
+                                                .filter(client =>
+                                                    client.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                                                    client.email?.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                                                    client.location?.toLowerCase().includes(clientSearchTerm.toLowerCase())
+                                                )
+                                                .map(client => {
+                                                    const balance = getClientAccountBalance(client.id);
+                                                    return (
+                                                        <div
+                                                            key={client.id}
+                                                            onClick={() => {
+                                                                setSelectedClient(client);
+                                                                setClientSearchTerm(client.name);
+                                                                handleClientChange(client.id);
+                                                                setIsClientDropdownVisible(false);
+                                                            }}
+                                                            className="p-3 hover:bg-gray-100 cursor-pointer border-b"
+                                                        >
+                                                            <div className="font-medium">{client.name}</div>
+                                                            <div className="text-sm text-gray-600">
+                                                                {client.email && `${client.email} | `}
+                                                                {client.location && `${client.location} | `}
+                                                                {balance > 0 && <span className="text-green-600 font-semibold">Balance: ${balance.toFixed(2)}</span>}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            {clients.filter(client =>
+                                                client.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                                                client.email?.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                                                client.location?.toLowerCase().includes(clientSearchTerm.toLowerCase())
+                                            ).length === 0 && (
+                                                <div className="p-3 text-gray-500 text-center">No clients found</div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type *</label>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Invoice (Optional)
+                                </label>
                                 <select
-                                    name="paymentType"
-                                    value={formData.paymentType}
-                                    onChange={handleInputChange}
-                                    required
+                                    name="documentId"
+                                    value={formData.documentId}
+                                    onChange={(e) => {
+                                        handleDocumentChange(e.target.value);
+                                        // Auto-detect payment type based on selection
+                                        setFormData(prev => ({
+                                            ...prev,
+                                            documentId: e.target.value,
+                                            paymentType: e.target.value ? 'toDocument' : 'toClient'
+                                        }));
+                                    }}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    disabled={!formData.clientId}
                                 >
-                                    <option value="toDocument">Pay Specific Invoice</option>
-                                    <option value="toClient">Add to Client Account (Unallocated)</option>
+                                    <option value="">-- No Invoice (Add to Client Account) --</option>
+                                    {getFilteredDocuments(formData.clientId).map(doc => {
+                                        const docInfo = getDocumentInfo(doc.id);
+                                        const outstanding = getOutstandingAmount(doc.id);
+                                        return (
+                                            <option key={doc.id} value={doc.id}>
+                                                {docInfo.number} - {selectedClient?.name || 'Client'} - ${docInfo.total.toFixed(2)} (Due: ${outstanding.toFixed(2)})
+                                            </option>
+                                        );
+                                    })}
                                 </select>
                                 <p className="text-xs text-gray-500 mt-1">
-                                    {formData.paymentType === 'toDocument'
-                                        ? 'Payment will be allocated directly to an invoice'
-                                        : 'Payment will be added to client account for later allocation'}
+                                    {formData.documentId
+                                        ? '✓ Payment will be allocated directly to the selected invoice'
+                                        : '→ Payment will be added to client account balance for later allocation'}
                                 </p>
                             </div>
-
-                            {formData.paymentType === 'toDocument' && (
-                                <div className="md:col-span-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Invoice *</label>
-                                    <select
-                                        name="documentId"
-                                        value={formData.documentId}
-                                        onChange={(e) => handleDocumentChange(e.target.value)}
-                                        required={formData.paymentType === 'toDocument'}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                    >
-                                        <option value="">Select Invoice</option>
-                                        {getFilteredDocuments(formData.clientId).map(doc => {
-                                            const docInfo = getDocumentInfo(doc.id);
-                                            const outstanding = getOutstandingAmount(doc.id);
-                                            return (
-                                                <option key={doc.id} value={doc.id}>
-                                                    {docInfo.type} #{docInfo.number} - ${docInfo.total.toFixed(2)} (Outstanding: ${outstanding.toFixed(2)})
-                                                </option>
-                                            );
-                                        })}
-                                    </select>
-                                </div>
-                            )}
 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
@@ -773,10 +908,54 @@ const PaymentsPage = () => {
                 )}
             </div>
 
+            {/* Client Stats when filtering */}
+            {clientFilter !== 'all' && (
+                <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg p-4 mb-6">
+                    <h3 className="text-lg font-semibold text-indigo-900 mb-3">
+                        {clients.find(c => c.id === clientFilter)?.name || 'Client'} - Payment Summary
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-white rounded-lg p-3 shadow-sm">
+                            <p className="text-xs text-gray-600">Total Paid</p>
+                            <p className="text-xl font-bold text-green-600">
+                                ${getClientPayments(clientFilter).reduce((sum, p) => sum + p.amount, 0).toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 shadow-sm">
+                            <p className="text-xs text-gray-600">Unallocated Balance</p>
+                            <p className="text-xl font-bold text-blue-600">
+                                ${getClientAccountBalance(clientFilter).toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 shadow-sm">
+                            <p className="text-xs text-gray-600">Total Outstanding</p>
+                            <p className="text-xl font-bold text-red-600">
+                                ${getClientOutstandingAmount(clientFilter).toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 shadow-sm">
+                            <p className="text-xs text-gray-600">Payments Count</p>
+                            <p className="text-xl font-bold text-gray-800">
+                                {getClientPayments(clientFilter).length}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Payments List */}
             <div className="bg-white rounded-lg shadow-lg overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200">
-                    <h2 className="text-lg font-semibold text-gray-800">Payment History</h2>
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-semibold text-gray-800">Payment History</h2>
+                        <input
+                            type="text"
+                            placeholder="Search payments..."
+                            value={paymentSearchTerm}
+                            onChange={(e) => setPaymentSearchTerm(e.target.value)}
+                            className="px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64"
+                        />
+                    </div>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -799,7 +978,14 @@ const PaymentsPage = () => {
                                 const isAllocated = payment.settledToDocument;
 
                                 return (
-                                    <tr key={payment.id} className="hover:bg-gray-50">
+                                    <tr
+                                        key={payment.id}
+                                        className="hover:bg-indigo-50 cursor-pointer transition-colors"
+                                        onClick={() => {
+                                            setSelectedPaymentForView(payment);
+                                            setShowPaymentReceipt(true);
+                                        }}
+                                    >
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                             {payment.paymentDate?.toDate ?
                                                 payment.paymentDate.toDate().toLocaleDateString() :
@@ -837,7 +1023,7 @@ const PaymentsPage = () => {
                                             {payment.reference || '-'}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                            <div className="flex space-x-2">
+                                            <div className="flex space-x-2" onClick={(e) => e.stopPropagation()}>
                                                 <button
                                                     onClick={() => {
                                                         setEditingPayment(payment);
@@ -873,7 +1059,151 @@ const PaymentsPage = () => {
                         </tbody>
                     </table>
                 </div>
+
+                {/* Load More Button */}
+                {!paymentSearchTerm && payments.filter(p => clientFilter === 'all' || p.clientId === clientFilter).length > displayedPaymentsLimit && (
+                    <div className="px-6 py-4 border-t border-gray-200 text-center">
+                        <button
+                            onClick={() => setDisplayedPaymentsLimit(prev => prev + 20)}
+                            className="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+                        >
+                            Load More Payments ({payments.filter(p => clientFilter === 'all' || p.clientId === clientFilter).length - displayedPaymentsLimit} remaining)
+                        </button>
+                    </div>
+                )}
             </div>
+
+            {/* Payment Receipt Modal */}
+            {showPaymentReceipt && selectedPaymentForView && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setShowPaymentReceipt(false)}>
+                    <div className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                        {/* Receipt Header */}
+                        <div className="bg-indigo-600 text-white px-6 py-4 flex justify-between items-center print:bg-white print:text-black">
+                            <h2 className="text-xl font-bold">Payment Receipt</h2>
+                            <button onClick={() => setShowPaymentReceipt(false)} className="text-white hover:text-gray-200 print:hidden">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        {/* Receipt Content */}
+                        <div className="p-8">
+                            {/* Company Info (from settings - you'll need to add this) */}
+                            <div className="mb-6 pb-6 border-b-2 border-gray-300">
+                                <h3 className="text-2xl font-bold text-gray-800 mb-2">Payment Confirmation</h3>
+                                <p className="text-sm text-gray-600">Receipt #{selectedPaymentForView.id.substring(0, 8).toUpperCase()}</p>
+                            </div>
+
+                            {/* Payment Details */}
+                            <div className="grid grid-cols-2 gap-6 mb-6">
+                                <div>
+                                    <h4 className="text-sm font-semibold text-gray-600 mb-2">PAYMENT FROM</h4>
+                                    <p className="text-lg font-medium text-gray-900">{getClientName(selectedPaymentForView)}</p>
+                                    {clients.find(c => c.id === selectedPaymentForView.clientId) && (
+                                        <div className="text-sm text-gray-600 mt-1">
+                                            {clients.find(c => c.id === selectedPaymentForView.clientId)?.email && (
+                                                <p>{clients.find(c => c.id === selectedPaymentForView.clientId)?.email}</p>
+                                            )}
+                                            {clients.find(c => c.id === selectedPaymentForView.clientId)?.location && (
+                                                <p>{clients.find(c => c.id === selectedPaymentForView.clientId)?.location}</p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <h4 className="text-sm font-semibold text-gray-600 mb-2">PAYMENT DATE</h4>
+                                    <p className="text-lg font-medium text-gray-900">
+                                        {selectedPaymentForView.paymentDate?.toDate ?
+                                            selectedPaymentForView.paymentDate.toDate().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) :
+                                            new Date(selectedPaymentForView.paymentDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+                                        }
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Payment Amount - Highlighted */}
+                            <div className="bg-green-50 border-2 border-green-200 rounded-lg p-6 mb-6">
+                                <div className="text-center">
+                                    <p className="text-sm font-semibold text-green-700 mb-1">AMOUNT PAID</p>
+                                    <p className="text-4xl font-bold text-green-600">${selectedPaymentForView.amount.toFixed(2)}</p>
+                                </div>
+                            </div>
+
+                            {/* Payment Info Table */}
+                            <div className="border border-gray-300 rounded-lg overflow-hidden mb-6">
+                                <table className="min-w-full">
+                                    <tbody className="divide-y divide-gray-200">
+                                        <tr>
+                                            <td className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700">Payment Method</td>
+                                            <td className="px-4 py-3 text-sm text-gray-900 capitalize">{selectedPaymentForView.paymentMethod.replace('_', ' ')}</td>
+                                        </tr>
+                                        <tr>
+                                            <td className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700">Payment Type</td>
+                                            <td className="px-4 py-3 text-sm text-gray-900">
+                                                {selectedPaymentForView.settledToDocument ? (
+                                                    <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                                                        Invoice Payment
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                                                        Client Account
+                                                    </span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                        {selectedPaymentForView.documentId && (
+                                            <tr>
+                                                <td className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700">Invoice</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">
+                                                    {getDocumentInfo(selectedPaymentForView.documentId)?.number || 'N/A'}
+                                                </td>
+                                            </tr>
+                                        )}
+                                        {selectedPaymentForView.reference && (
+                                            <tr>
+                                                <td className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700">Reference</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{selectedPaymentForView.reference}</td>
+                                            </tr>
+                                        )}
+                                        {selectedPaymentForView.notes && (
+                                            <tr>
+                                                <td className="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700">Notes</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{selectedPaymentForView.notes}</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Footer */}
+                            <div className="text-center text-sm text-gray-500 mb-6">
+                                <p>Thank you for your payment!</p>
+                                <p className="mt-2">Generated on {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex justify-center space-x-4 print:hidden">
+                                <button
+                                    onClick={() => window.print()}
+                                    className="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors flex items-center"
+                                >
+                                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                                    </svg>
+                                    Print / Save as PDF
+                                </button>
+                                <button
+                                    onClick={() => setShowPaymentReceipt(false)}
+                                    className="px-6 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition-colors"
+                                >
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Migration Modal */}
             {showMigrationModal && (

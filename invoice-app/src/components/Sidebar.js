@@ -54,8 +54,25 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
 
     return (
         <div className={sidebarClasses}>
-            <div className="p-5 text-2xl font-bold border-b border-gray-700">
-                {companyName}
+            <div className="p-5 border-b border-gray-700">
+                <div className="text-2xl font-bold text-white">
+                    {companyName}
+                </div>
+                <div className="mt-2 flex items-center space-x-2">
+                    <div className="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center flex-shrink-0">
+                        <span className="text-white font-semibold text-xs">
+                            {userInfo.displayName.charAt(0).toUpperCase()}
+                        </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-300 truncate">
+                            {userInfo.displayName}
+                        </p>
+                        <p className="text-xs text-gray-400 truncate">
+                            {userInfo.email}
+                        </p>
+                    </div>
+                </div>
             </div>
             <nav className="flex-1 px-2 py-4 space-y-2">
                 {navItems.map(item => (
