@@ -139,7 +139,8 @@ const AccountingPage = () => {
                 thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
                 filteredDocs = filteredDocs.filter(doc => {
                     const totalPaid = doc.totalPaid || 0;
-                    return totalPaid < doc.total && doc.date.toDate() < thirtyDaysAgo;
+                    // Only invoices can be overdue, not proformas
+                    return doc.type === 'invoice' && totalPaid < doc.total && doc.date.toDate() < thirtyDaysAgo;
                 });
             }
 

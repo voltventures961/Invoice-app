@@ -41,19 +41,21 @@ export const migratePayments = async (userId) => {
                 }
 
                 // Migrate each payment for this document
+                // IMPORTANT: All old payments in the payments array were already applied to this invoice
+                // So they should be marked as settledToDocument: true
                 for (const payment of documentData.payments) {
                     const paymentData = {
                         clientId: clientId,
                         documentId: documentId,
                         amount: payment.amount || 0,
                         paymentDate: payment.date || payment.timestamp || new Date(),
-                        paymentMethod: 'migrated',
+                        paymentMethod: payment.method || 'migrated',
                         reference: `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
-                        notes: payment.note || 'Migrated payment',
+                        notes: payment.note || 'Migrated payment - already applied to this invoice',
                         createdAt: payment.timestamp || new Date(),
                         updatedAt: new Date(),
                         migrated: true,
-                        settledToDocument: true // Payment is already allocated to a specific document
+                        settledToDocument: true // This payment was in the document's payments array, so it was already applied
                     };
 
                     const newPaymentRef = await addDoc(collection(db, 'payments'), paymentData);
@@ -213,12 +215,13 @@ export const rollbackMigration = async (userId) => {
 export const repairMigratedPayments = async (userId) => {
     try {
         console.log('Starting comprehensive payment repair...');
-        
+
         // Get all payments (not just migrated ones)
         const paymentsQuery = query(collection(db, 'payments'));
         const paymentsSnapshot = await getDocs(paymentsQuery);
         let repairedCount = 0;
-        
+        let fixedSettlement = 0;
+
         // Get all documents to match with payments
         const documentsQuery = query(collection(db, `documents/${userId}/userDocuments`));
         const documentsSnapshot = await getDocs(documentsQuery);
@@ -226,7 +229,7 @@ export const repairMigratedPayments = async (userId) => {
         documentsSnapshot.forEach(doc => {
             documentsMap.set(doc.id, doc.data());
         });
-        
+
         // Get all clients
         const clientsQuery = query(collection(db, `clients/${userId}/userClients`));
         const clientsSnapshot = await getDocs(clientsQuery);
@@ -234,51 +237,81 @@ export const repairMigratedPayments = async (userId) => {
         clientsSnapshot.forEach(doc => {
             clientsMap.set(doc.id, doc.data());
         });
-        
+
         console.log(`Found ${paymentsSnapshot.size} payments, ${documentsSnapshot.size} documents, ${clientsSnapshot.size} clients`);
-        
+
         for (const paymentDoc of paymentsSnapshot.docs) {
             const payment = paymentDoc.data();
-            const documentData = documentsMap.get(payment.documentId);
-            
+
+            // CRITICAL FIX: If payment has documentId, it should be marked as settled
+            // If migrated and has documentId, it was already applied to that invoice
+            const shouldBeSettled = payment.documentId && payment.documentId !== null;
+
+            const documentData = payment.documentId ? documentsMap.get(payment.documentId) : null;
+
             if (documentData) {
                 const clientId = documentData.client?.id || documentData.clientId;
                 const clientData = clientsMap.get(clientId);
-                
+
                 if (clientId && clientId !== 'unknown' && clientData) {
                     const updatedPaymentData = {
                         clientId: clientId,
                         clientName: clientData.name,
                         reference: payment.reference || `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
+                        settledToDocument: shouldBeSettled, // Mark as settled if it has a documentId
                         updatedAt: new Date(),
                         repaired: true
                     };
-                    
+
                     await updateDoc(doc(db, 'payments', paymentDoc.id), updatedPaymentData);
                     repairedCount++;
-                    console.log(`Repaired payment for client: ${clientData.name}`);
+                    if (shouldBeSettled && !payment.settledToDocument) {
+                        fixedSettlement++;
+                    }
+                    console.log(`Repaired payment for client: ${clientData.name}, settled: ${shouldBeSettled}`);
                 } else if (clientId && clientId !== 'unknown') {
                     // Client ID exists but client data not found - just update the reference
                     const updatedPaymentData = {
                         reference: payment.reference || `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
+                        settledToDocument: shouldBeSettled,
                         updatedAt: new Date(),
                         repaired: true
                     };
-                    
+
                     await updateDoc(doc(db, 'payments', paymentDoc.id), updatedPaymentData);
                     repairedCount++;
+                    if (shouldBeSettled && !payment.settledToDocument) {
+                        fixedSettlement++;
+                    }
                     console.log(`Updated payment reference for client ID: ${clientId}`);
                 } else {
                     console.log(`Skipping payment - client not found: ${clientId}`);
                 }
+            } else if (payment.documentId) {
+                // Payment has documentId but document not found - mark as settled anyway
+                console.log(`Warning: Payment references missing document ${payment.documentId}, marking as settled`);
+                await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                    settledToDocument: true,
+                    updatedAt: new Date(),
+                    repaired: true
+                });
+                fixedSettlement++;
+                repairedCount++;
             } else {
-                console.log(`Skipping payment - document not found: ${payment.documentId}`);
+                // Payment has no documentId - this is a client account payment, mark as unsettled
+                console.log(`Payment ${paymentDoc.id} has no document - marking as client account payment`);
+                await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                    settledToDocument: false,
+                    updatedAt: new Date(),
+                    repaired: true
+                });
+                repairedCount++;
             }
         }
-        
-        console.log(`Payment repair completed. Repaired ${repairedCount} payments.`);
-        return { success: true, repairedCount };
-        
+
+        console.log(`Payment repair completed. Repaired ${repairedCount} payments. Fixed settlement status on ${fixedSettlement} payments.`);
+        return { success: true, repairedCount, fixedSettlement };
+
     } catch (error) {
         console.error('Payment repair failed:', error);
         return { success: false, error: error.message };

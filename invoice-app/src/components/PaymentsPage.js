@@ -28,6 +28,8 @@ const PaymentsPage = () => {
     const [clientFilter, setClientFilter] = useState('all'); // Filter payments by client
     const [showClientSettlement, setShowClientSettlement] = useState(false);
     const [selectedClientForSettlement, setSelectedClientForSettlement] = useState(null);
+    const [showClientBalances, setShowClientBalances] = useState(false);
+    const [clientSearchTerm, setClientSearchTerm] = useState('');
 
     useEffect(() => {
         const fetchData = async () => {
@@ -112,16 +114,16 @@ const PaymentsPage = () => {
 
     const handleRepair = async () => {
         if (!auth.currentUser) return;
-        
+
         setLoading(true);
         setFeedback({ type: '', message: '' });
-        
+
         try {
             const result = await repairMigratedPayments(auth.currentUser.uid);
             if (result.success) {
-                setFeedback({ 
-                    type: 'success', 
-                    message: `Repair completed successfully! Fixed ${result.repairedCount} payments.` 
+                setFeedback({
+                    type: 'success',
+                    message: `Repair completed successfully! Fixed ${result.repairedCount} payments. Corrected settlement status on ${result.fixedSettlement} payments.`
                 });
             } else {
                 setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
@@ -293,29 +295,40 @@ const PaymentsPage = () => {
     const getFilteredDocuments = (clientId) => {
         // IMPORTANT: Only show invoices for payment allocation (not proformas)
         // Proformas should not have payments - payments should be added to client account instead
+        // Also exclude fully paid/settled invoices
         if (!clientId) {
-            // Show all active invoices if no client selected
-            const filtered = documents.filter(doc =>
+            // Show all active unpaid invoices if no client selected
+            const filtered = documents.filter(doc => {
+                const totalPaid = doc.totalPaid || 0;
+                const outstanding = doc.total - totalPaid;
+                return (
+                    doc.type === 'invoice' && // Only invoices
+                    !doc.cancelled &&
+                    !doc.deleted &&
+                    !doc.transformedToInvoice &&
+                    !doc.convertedToInvoice &&
+                    !doc.converted &&
+                    outstanding > 0.01 // Has outstanding balance (not fully paid)
+                );
+            });
+            return filtered;
+        }
+
+        // Show only unpaid invoices for the selected client
+        const filtered = documents.filter(doc => {
+            const totalPaid = doc.totalPaid || 0;
+            const outstanding = doc.total - totalPaid;
+            return (
                 doc.type === 'invoice' && // Only invoices
+                doc.client && doc.client.id === clientId &&
                 !doc.cancelled &&
                 !doc.deleted &&
                 !doc.transformedToInvoice &&
                 !doc.convertedToInvoice &&
-                !doc.converted
+                !doc.converted &&
+                outstanding > 0.01 // Has outstanding balance (not fully paid)
             );
-            return filtered;
-        }
-
-        // Show only invoices for the selected client
-        const filtered = documents.filter(doc =>
-            doc.type === 'invoice' && // Only invoices
-            doc.client && doc.client.id === clientId &&
-            !doc.cancelled &&
-            !doc.deleted &&
-            !doc.transformedToInvoice &&
-            !doc.convertedToInvoice &&
-            !doc.converted
-        );
+        });
         return filtered;
     };
 
@@ -511,22 +524,35 @@ const PaymentsPage = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Client *</label>
+                                <input
+                                    type="text"
+                                    placeholder="Search clients..."
+                                    value={clientSearchTerm}
+                                    onChange={(e) => setClientSearchTerm(e.target.value)}
+                                    className="w-full px-3 py-2 mb-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
                                 <select
                                     name="clientId"
                                     value={formData.clientId}
                                     onChange={(e) => handleClientChange(e.target.value)}
                                     required
                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    size="5"
                                 >
                                     <option value="">Select Client</option>
-                                    {clients.map(client => {
-                                        const balance = getClientAccountBalance(client.id);
-                                        return (
-                                            <option key={client.id} value={client.id}>
-                                                {client.name} {balance > 0 ? `(Balance: $${balance.toFixed(2)})` : ''}
-                                            </option>
-                                        );
-                                    })}
+                                    {clients
+                                        .filter(client =>
+                                            client.name.toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                                            client.email?.toLowerCase().includes(clientSearchTerm.toLowerCase())
+                                        )
+                                        .map(client => {
+                                            const balance = getClientAccountBalance(client.id);
+                                            return (
+                                                <option key={client.id} value={client.id}>
+                                                    {client.name} {balance > 0 ? `(Balance: $${balance.toFixed(2)})` : ''}
+                                                </option>
+                                            );
+                                        })}
                                 </select>
                             </div>
 
@@ -672,6 +698,80 @@ const PaymentsPage = () => {
                     </form>
                 </div>
             )}
+
+            {/* Client Balances Summary */}
+            <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-6">
+                <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                    <h2 className="text-lg font-semibold text-gray-800">Client Account Balances</h2>
+                    <button
+                        onClick={() => setShowClientBalances(!showClientBalances)}
+                        className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                    >
+                        {showClientBalances ? 'Hide' : 'Show'}
+                    </button>
+                </div>
+                {showClientBalances && (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Client</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Unallocated Balance</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total Outstanding</th>
+                                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Unpaid Invoices</th>
+                                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {clients
+                                    .filter(client => getClientAccountBalance(client.id) > 0)
+                                    .map(client => {
+                                        const balance = getClientAccountBalance(client.id);
+                                        const outstanding = getClientOutstandingAmount(client.id);
+                                        const unpaidInvoices = getClientDocuments(client.id).filter(doc => (doc.totalPaid || 0) < doc.total);
+
+                                        return (
+                                            <tr key={client.id} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                    {client.name}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-green-600 text-right">
+                                                    ${balance.toFixed(2)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-red-600 text-right">
+                                                    ${outstanding.toFixed(2)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                                                    {unpaidInvoices.length}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
+                                                    {balance > 0 && outstanding > 0 && (
+                                                        <button
+                                                            onClick={() => {
+                                                                setSelectedClientForSettlement(client);
+                                                                setShowClientSettlement(true);
+                                                            }}
+                                                            className="text-indigo-600 hover:text-indigo-900 font-medium"
+                                                        >
+                                                            Settle Invoices
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                {clients.filter(client => getClientAccountBalance(client.id) > 0).length === 0 && (
+                                    <tr>
+                                        <td colSpan="5" className="px-6 py-4 text-center text-sm text-gray-500">
+                                            No clients with unallocated balance
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
 
             {/* Payments List */}
             <div className="bg-white rounded-lg shadow-lg overflow-hidden">
