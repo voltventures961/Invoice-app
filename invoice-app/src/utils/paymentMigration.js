@@ -185,24 +185,18 @@ export const rollbackMigration = async (userId) => {
     }
 };
 
-// Repair function to fix migrated payments with missing client/document data
+// Comprehensive repair function to fix all payment data
 export const repairMigratedPayments = async (userId) => {
     try {
-        console.log('Starting payment repair...');
+        console.log('Starting comprehensive payment repair...');
         
-        // Get all migrated payments
-        const paymentsQuery = query(
-            collection(db, 'payments'),
-            where('migrated', '==', true)
-        );
-        
+        // Get all payments (not just migrated ones)
+        const paymentsQuery = query(collection(db, 'payments'));
         const paymentsSnapshot = await getDocs(paymentsQuery);
         let repairedCount = 0;
         
         // Get all documents to match with payments
-        const documentsQuery = query(
-            collection(db, `documents/${userId}/userDocuments`)
-        );
+        const documentsQuery = query(collection(db, `documents/${userId}/userDocuments`));
         const documentsSnapshot = await getDocs(documentsQuery);
         const documentsMap = new Map();
         documentsSnapshot.forEach(doc => {
@@ -217,6 +211,8 @@ export const repairMigratedPayments = async (userId) => {
             clientsMap.set(doc.id, doc.data());
         });
         
+        console.log(`Found ${paymentsSnapshot.size} payments, ${documentsSnapshot.size} documents, ${clientsSnapshot.size} clients`);
+        
         for (const paymentDoc of paymentsSnapshot.docs) {
             const payment = paymentDoc.data();
             const documentData = documentsMap.get(payment.documentId);
@@ -225,19 +221,23 @@ export const repairMigratedPayments = async (userId) => {
                 const clientId = documentData.client?.id || documentData.clientId;
                 const clientData = clientsMap.get(clientId);
                 
-                if (clientId && clientId !== 'unknown') {
-                    const clientData = clientsMap.get(clientId);
+                if (clientId && clientId !== 'unknown' && clientData) {
                     const updatedPaymentData = {
                         clientId: clientId,
-                        clientName: clientData?.name || 'Unknown Client',
-                        reference: `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
+                        clientName: clientData.name,
+                        reference: payment.reference || `Migrated from ${documentData.type || 'document'} #${documentData.invoiceNumber || documentData.proformaNumber || documentData.documentNumber || 'N/A'}`,
                         updatedAt: new Date(),
                         repaired: true
                     };
                     
                     await updateDoc(doc(db, 'payments', paymentDoc.id), updatedPaymentData);
                     repairedCount++;
+                    console.log(`Repaired payment for client: ${clientData.name}`);
+                } else {
+                    console.log(`Skipping payment - client not found: ${clientId}`);
                 }
+            } else {
+                console.log(`Skipping payment - document not found: ${payment.documentId}`);
             }
         }
         

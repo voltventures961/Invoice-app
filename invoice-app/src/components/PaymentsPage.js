@@ -41,6 +41,7 @@ const PaymentsPage = () => {
                     id: doc.id,
                     ...doc.data()
                 }));
+                console.log(`Loaded ${clientsData.length} clients:`, clientsData.map(c => c.name));
                 setClients(clientsData);
 
                 // Fetch documents (invoices and proformas) from the correct path
@@ -50,6 +51,7 @@ const PaymentsPage = () => {
                     id: doc.id,
                     ...doc.data()
                 }));
+                console.log(`Loaded ${documentsData.length} documents:`, documentsData.map(d => `${d.type} #${d.invoiceNumber || d.proformaNumber || d.documentNumber}`));
                 setDocuments(documentsData);
 
                 // Listen to payments with limit for better performance
@@ -310,6 +312,16 @@ const PaymentsPage = () => {
                         className="bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
                     >
                         Repair Payments
+                    </button>
+                    <button
+                        onClick={() => {
+                            console.log('Clients:', clients);
+                            console.log('Documents:', documents);
+                            console.log('Payments:', payments);
+                        }}
+                        className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
+                    >
+                        Debug Data
                     </button>
                     <button
                         onClick={() => setShowAddForm(true)}
