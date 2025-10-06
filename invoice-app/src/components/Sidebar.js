@@ -39,6 +39,7 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
         { name: 'Dashboard', page: 'dashboard' },
         { name: 'Proformas', page: 'proformas' },
         { name: 'Invoices', page: 'invoices' },
+        { name: 'Payments', page: 'payments' },
         { name: 'Stock Items', page: 'stock' },
         { name: 'Clients', page: 'clients' },
         { name: 'Accounting', page: 'accounting' },

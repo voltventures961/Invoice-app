@@ -94,27 +94,25 @@ const ProformasPage = ({ navigateTo }) => {
         if (!selectedProforma || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
         
         try {
-            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, selectedProforma.id);
             const amount = parseFloat(paymentAmount);
-            const currentPaid = selectedProforma.totalPaid || 0;
-            const newTotalPaid = Math.min(currentPaid + amount, selectedProforma.total);
             
-            const payment = {
+            // Add payment to the payments collection
+            const paymentData = {
+                clientId: selectedProforma.client.id,
+                documentId: selectedProforma.id,
                 amount: amount,
-                date: new Date(paymentDate),
-                note: paymentNote,
-                timestamp: new Date()
+                paymentDate: new Date(paymentDate),
+                paymentMethod: 'manual_entry',
+                reference: `Proforma #${selectedProforma.proformaNumber}`,
+                notes: paymentNote,
+                createdAt: new Date(),
+                updatedAt: new Date()
             };
             
-            const payments = selectedProforma.payments || [];
-            payments.push(payment);
+            await addDoc(collection(db, 'payments'), paymentData);
             
-            await updateDoc(docRef, {
-                payments: payments,
-                totalPaid: newTotalPaid,
-                paid: newTotalPaid >= selectedProforma.total,
-                lastPaymentDate: new Date(paymentDate)
-            });
+            // Update document payment status
+            await updateDocumentPaymentStatus(selectedProforma.id);
             
             setShowPaymentModal(false);
             setSelectedProforma(null);
@@ -124,27 +122,34 @@ const ProformasPage = ({ navigateTo }) => {
         }
     };
 
-    // Handle cancel payment
-    const handleCancelPayment = async (proforma, paymentIndex) => {
-        if (!window.confirm('Are you sure you want to cancel this payment?')) return;
-        
+    // Update document payment status based on payments collection
+    const updateDocumentPaymentStatus = async (documentId) => {
         try {
-            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, proforma.id);
-            const payments = [...(proforma.payments || [])];
+            // Get all payments for this document
+            const paymentsQuery = query(collection(db, 'payments'), where('documentId', '==', documentId));
+            const paymentsSnapshot = await getDocs(paymentsQuery);
             
-            payments.splice(paymentIndex, 1);
-            
-            const newTotalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-            
-            await updateDoc(docRef, {
-                payments: payments,
-                totalPaid: newTotalPaid,
-                paid: newTotalPaid >= proforma.total
+            let totalPaid = 0;
+            paymentsSnapshot.forEach(doc => {
+                totalPaid += doc.data().amount;
+            });
+
+            // Update the document
+            const documentRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentId);
+            await updateDoc(documentRef, {
+                totalPaid: totalPaid,
+                paid: totalPaid >= (selectedProforma?.total || 0),
+                lastPaymentDate: new Date(),
+                updatedAt: new Date()
             });
         } catch (error) {
-            console.error("Error cancelling payment: ", error);
-            alert("Error cancelling payment. Please try again.");
+            console.error('Error updating document payment status:', error);
         }
+    };
+
+    // Handle cancel payment - redirect to payments page for management
+    const handleCancelPayment = async (proforma, paymentIndex) => {
+        alert('To manage payments, please go to the Payments page in the sidebar.');
     };
 
     const fetchHistoryInvoices = async (loadMore = false) => {

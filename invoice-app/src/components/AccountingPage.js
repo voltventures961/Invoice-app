@@ -12,7 +12,7 @@ const AccountingPage = () => {
     const [clientFilter, setClientFilter] = useState('all'); // 'all' or client id
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'paid', 'unpaid', 'overdue'
     const [documentTypeFilter, setDocumentTypeFilter] = useState('all'); // 'all', 'invoice', 'proforma'
-    const [showConvertedFilter, setShowConvertedFilter] = useState('exclude'); // 'include', 'exclude', 'only'
+ // 'include', 'exclude', 'only'
     const [sortColumn, setSortColumn] = useState('date'); // Column to sort by
     const [sortDirection, setSortDirection] = useState('desc'); // 'asc' or 'desc'
     const [uniqueClients, setUniqueClients] = useState([]);
@@ -153,8 +153,6 @@ const AccountingPage = () => {
             let realMandaysCost = 0;
             let vatCollected = 0;
             let totalPaid = 0;
-            let totalUnpaid = 0;
-            let overdueAmount = 0;
             let collectedProfit = 0;
             
             const thirtyDaysAgo = new Date();
@@ -186,8 +184,6 @@ const AccountingPage = () => {
                 // Calculate payment status and collected profit
                 const paid = doc.totalPaid || 0;
                 totalPaid += paid;
-                const unpaid = Math.max(0, (doc.total || 0) - paid);
-                totalUnpaid += unpaid;
                 
                 // Calculate collected profit (profit from paid invoices only)
                 if (paid > 0) {
@@ -224,11 +220,6 @@ const AccountingPage = () => {
                     collectedProfit += docProfit * paymentRatio;
                 }
                 
-                // Check if overdue
-                if (unpaid > 0 && doc.date.toDate() < thirtyDaysAgo) {
-                    overdueAmount += unpaid;
-                }
-                
                 // Calculate items revenue and cost
                 if (doc.items && Array.isArray(doc.items)) {
                     doc.items.forEach(item => {
@@ -244,6 +235,21 @@ const AccountingPage = () => {
             // totalRevenue already includes display mandays (they're part of the document total)
             // We need to subtract real mandays cost and other costs
             const totalProfit = totalRevenue - totalCost - vatCollected - realMandaysCost;
+            
+            // Recalculate outstanding amount based on filtered documents
+            let filteredTotalUnpaid = 0;
+            let filteredOverdueAmount = 0;
+            
+            filteredDocs.forEach(doc => {
+                const paid = doc.totalPaid || 0;
+                const unpaid = Math.max(0, (doc.total || 0) - paid);
+                filteredTotalUnpaid += unpaid;
+                
+                // Check if overdue
+                if (unpaid > 0 && doc.date.toDate() < thirtyDaysAgo) {
+                    filteredOverdueAmount += unpaid;
+                }
+            });
             
             // Debug logging
             console.log('Profit Calculation:', {
@@ -269,8 +275,8 @@ const AccountingPage = () => {
                 invoiceCount: filteredDocs.length,
                 averageInvoiceValue,
                 totalPaid,
-                totalUnpaid,
-                overdueAmount
+                totalUnpaid: filteredTotalUnpaid,
+                overdueAmount: filteredOverdueAmount
             });
 
             // Get unique clients for filter dropdown from all documents (not filtered)
@@ -288,7 +294,7 @@ const AccountingPage = () => {
         });
 
         return () => unsubscribe();
-    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter, showConvertedFilter]);
+    }, [filterPeriod, customStartDate, customEndDate, documentTypeFilter, categoryFilter, clientFilter, statusFilter]);
 
     const exportToCSV = () => {
         const headers = ['Date', 'Document #', 'Type', 'Status', 'Client', 'Items Revenue', 'Labor Revenue', 'Display Mandays', 'Real Mandays Cost', 'VAT', 'Total', 'Cost', 'Net Profit', 'Paid Amount', 'Collected Profit'];
@@ -429,7 +435,7 @@ const AccountingPage = () => {
             {/* Filter Controls */}
             <div className="bg-white p-6 rounded-lg shadow-lg mb-6">
                 <h3 className="text-lg font-medium text-gray-700 mb-4">Filters & Controls</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Period</label>
                         <select 
@@ -522,18 +528,6 @@ const AccountingPage = () => {
                         </select>
                     </div>
                     
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Converted Proformas</label>
-                        <select 
-                            value={showConvertedFilter} 
-                            onChange={(e) => setShowConvertedFilter(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            <option value="exclude">Exclude Converted</option>
-                            <option value="include">Include All</option>
-                            <option value="only">Only Converted</option>
-                        </select>
-                    </div>
                 </div>
             </div>
 

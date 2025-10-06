@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, deleteDoc, addDoc, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 
 const InvoicesPage = ({ navigateTo }) => {
@@ -85,27 +85,25 @@ const InvoicesPage = ({ navigateTo }) => {
         if (!selectedInvoice || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
         
         try {
-            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, selectedInvoice.id);
             const amount = parseFloat(paymentAmount);
-            const currentPaid = selectedInvoice.totalPaid || 0;
-            const newTotalPaid = Math.min(currentPaid + amount, selectedInvoice.total);
             
-            const payment = {
+            // Add payment to the payments collection
+            const paymentData = {
+                clientId: selectedInvoice.client.id,
+                documentId: selectedInvoice.id,
                 amount: amount,
-                date: new Date(paymentDate),
-                note: paymentNote,
-                timestamp: new Date()
+                paymentDate: new Date(paymentDate),
+                paymentMethod: 'manual_entry',
+                reference: `Invoice #${selectedInvoice.invoiceNumber}`,
+                notes: paymentNote,
+                createdAt: new Date(),
+                updatedAt: new Date()
             };
             
-            const payments = selectedInvoice.payments || [];
-            payments.push(payment);
+            await addDoc(collection(db, 'payments'), paymentData);
             
-            await updateDoc(docRef, {
-                payments: payments,
-                totalPaid: newTotalPaid,
-                paid: newTotalPaid >= selectedInvoice.total,
-                lastPaymentDate: new Date(paymentDate)
-            });
+            // Update document payment status
+            await updateDocumentPaymentStatus(selectedInvoice.id);
             
             setShowPaymentModal(false);
             setSelectedInvoice(null);
@@ -115,28 +113,34 @@ const InvoicesPage = ({ navigateTo }) => {
         }
     };
 
-    // Handle cancel payment
-    const handleCancelPayment = async (invoice, paymentIndex) => {
-        if (!window.confirm('Are you sure you want to cancel this payment?')) return;
-        
+    // Update document payment status based on payments collection
+    const updateDocumentPaymentStatus = async (documentId) => {
         try {
-            const docRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, invoice.id);
-            const payments = [...(invoice.payments || [])];
-            const cancelledPayment = payments[paymentIndex];
+            // Get all payments for this document
+            const paymentsQuery = query(collection(db, 'payments'), where('documentId', '==', documentId));
+            const paymentsSnapshot = await getDocs(paymentsQuery);
             
-            payments.splice(paymentIndex, 1);
-            
-            const newTotalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-            
-            await updateDoc(docRef, {
-                payments: payments,
-                totalPaid: newTotalPaid,
-                paid: newTotalPaid >= invoice.total
+            let totalPaid = 0;
+            paymentsSnapshot.forEach(doc => {
+                totalPaid += doc.data().amount;
+            });
+
+            // Update the document
+            const documentRef = doc(db, `documents/${auth.currentUser.uid}/userDocuments`, documentId);
+            await updateDoc(documentRef, {
+                totalPaid: totalPaid,
+                paid: totalPaid >= (selectedInvoice?.total || 0),
+                lastPaymentDate: new Date(),
+                updatedAt: new Date()
             });
         } catch (error) {
-            console.error("Error cancelling payment: ", error);
-            alert("Error cancelling payment. Please try again.");
+            console.error('Error updating document payment status:', error);
         }
+    };
+
+    // Handle cancel payment - redirect to payments page for management
+    const handleCancelPayment = async (invoice, paymentIndex) => {
+        alert('To manage payments, please go to the Payments page in the sidebar.');
     };
 
     const handleCancelInvoice = async (invoiceId) => {
