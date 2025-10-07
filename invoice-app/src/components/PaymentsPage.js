@@ -72,17 +72,18 @@ const PaymentsPage = () => {
                 }));
                 setClients(clientsData);
 
-                // Fetch only invoices (not proformas) for better performance
+                // Fetch all documents and filter in memory (no index required)
                 const documentsQuery = query(
-                    collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
-                    where('type', '==', 'invoice'),
-                    orderBy('date', 'desc')
+                    collection(db, `documents/${auth.currentUser.uid}/userDocuments`)
                 );
                 const documentsSnapshot = await getDocs(documentsQuery);
-                const documentsData = documentsSnapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
+                const documentsData = documentsSnapshot.docs
+                    .map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }))
+                    .filter(doc => doc.type === 'invoice') // Filter invoices in memory
+                    .sort((a, b) => b.date?.toDate?.() - a.date?.toDate?.()); // Sort by date desc
                 setDocuments(documentsData);
 
                 // Listen to payments (real-time) - this is the main data source

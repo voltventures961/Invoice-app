@@ -47,9 +47,9 @@ const Sidebar = ({ navigateTo, currentPage, isOpen, setOpen }) => {
     ];
 
     const sidebarClasses = `
-        bg-gray-800 text-white w-64 space-y-6 py-7 px-2 absolute inset-y-0 left-0 transform
+        bg-gray-800 text-white w-64 absolute inset-y-0 left-0 transform
         ${isOpen ? "translate-x-0" : "-translate-x-full"} md:relative md:translate-x-0
-        transition duration-200 ease-in-out z-20 flex flex-col shadow-lg
+        transition duration-200 ease-in-out z-20 flex flex-col shadow-lg md:sticky md:top-0 md:h-screen
     `;
 
     return (

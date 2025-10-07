@@ -13,6 +13,15 @@ const InvoicesPage = ({ navigateTo }) => {
     const [showPaymentRefundModal, setShowPaymentRefundModal] = useState(false);
     const [pendingCancelInvoice, setPendingCancelInvoice] = useState(null);
 
+    // Payment modal state
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [selectedInvoice, setSelectedInvoice] = useState(null);
+    const [paymentAmount, setPaymentAmount] = useState('');
+    const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+    const [paymentMethod, setPaymentMethod] = useState('cash');
+    const [paymentReference, setPaymentReference] = useState('');
+    const [paymentNote, setPaymentNote] = useState('');
+
     useEffect(() => {
         if (!auth.currentUser) return;
         
@@ -35,10 +44,10 @@ const InvoicesPage = ({ navigateTo }) => {
                 }
             });
             
-            // Sort by conversion date (newest converted first), then by creation date
+            // Sort by creation date (newest first)
             activeDocs.sort((a, b) => {
-                const dateA = a.convertedAt?.toDate ? a.convertedAt.toDate() : a.date.toDate();
-                const dateB = b.convertedAt?.toDate ? b.convertedAt.toDate() : b.date.toDate();
+                const dateA = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+                const dateB = b.date?.toDate ? b.date.toDate() : new Date(b.date);
                 return dateB - dateA;
             });
             cancelledDocs.sort((a, b) => (b.cancelledAt?.toDate() || new Date()) - (a.cancelledAt?.toDate() || new Date()));
@@ -85,30 +94,37 @@ const InvoicesPage = ({ navigateTo }) => {
     // Handle add payment
     const handleAddPayment = async () => {
         if (!selectedInvoice || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
-        
+
         try {
             const amount = parseFloat(paymentAmount);
-            
-            // Add payment to the payments collection
+
+            // Add payment to the payments collection (allocated to this invoice)
             const paymentData = {
                 clientId: selectedInvoice.client.id,
                 documentId: selectedInvoice.id,
                 amount: amount,
                 paymentDate: new Date(paymentDate),
-                paymentMethod: 'manual_entry',
-                reference: `Invoice #${selectedInvoice.invoiceNumber}`,
+                paymentMethod: paymentMethod,
+                reference: paymentReference || `Invoice #${selectedInvoice.invoiceNumber}`,
                 notes: paymentNote,
+                settledToDocument: true, // Payment is allocated to this invoice
                 createdAt: new Date(),
                 updatedAt: new Date()
             };
-            
+
             await addDoc(collection(db, 'payments'), paymentData);
-            
+
             // Update document payment status
             await updateDocumentPaymentStatus(selectedInvoice.id);
-            
+
+            // Reset form and close modal
             setShowPaymentModal(false);
             setSelectedInvoice(null);
+            setPaymentAmount('');
+            setPaymentNote('');
+            setPaymentReference('');
+            setPaymentMethod('cash');
+            setPaymentDate(new Date().toISOString().split('T')[0]);
         } catch (error) {
             console.error("Error adding payment: ", error);
             alert("Error adding payment. Please try again.");
@@ -349,12 +365,9 @@ const InvoicesPage = ({ navigateTo }) => {
                                                     </button>
                                                     {remaining > 0 && (
                                                         <button
-                                                            onClick={() => {
-                                                                // Redirect to Payments page for unified payment management
-                                                                navigateTo('payments');
-                                                            }}
+                                                            onClick={() => openPaymentModal(doc)}
                                                             className="text-green-600 hover:text-green-800 font-medium py-1 px-2 rounded-lg text-sm"
-                                                            title="Go to Payments page to add payment"
+                                                            title="Add payment to this invoice"
                                                         >
                                                             Add Payment
                                                         </button>
@@ -527,6 +540,158 @@ const InvoicesPage = ({ navigateTo }) => {
                                     </tbody>
                                 </table>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Payment Modal */}
+            {showPaymentModal && selectedInvoice && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+                        {/* Header */}
+                        <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-4">
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <h2 className="text-2xl font-bold">Add Payment</h2>
+                                    <p className="text-green-100 text-sm mt-1">
+                                        Invoice #{selectedInvoice.invoiceNumber} - {selectedInvoice.client.name}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        setShowPaymentModal(false);
+                                        setSelectedInvoice(null);
+                                    }}
+                                    className="text-white hover:text-gray-200 transition-colors"
+                                >
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Content */}
+                        <div className="p-6 overflow-y-auto flex-1">
+                            {/* Invoice Summary */}
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-lg mb-6 border border-gray-200">
+                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                    <div>
+                                        <p className="text-gray-600 font-medium mb-1">Invoice Total</p>
+                                        <p className="text-xl font-bold text-gray-900">${selectedInvoice.total.toFixed(2)}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-gray-600 font-medium mb-1">Paid</p>
+                                        <p className="text-xl font-bold text-green-600">${(selectedInvoice.totalPaid || 0).toFixed(2)}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-gray-600 font-medium mb-1">Outstanding</p>
+                                        <p className="text-xl font-bold text-red-600">
+                                            ${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Payment Form */}
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Payment Amount *
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={paymentAmount}
+                                        onChange={(e) => setPaymentAmount(e.target.value)}
+                                        step="0.01"
+                                        min="0.01"
+                                        max={selectedInvoice.total - (selectedInvoice.totalPaid || 0)}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-lg"
+                                        placeholder="0.00"
+                                        required
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Maximum: ${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Payment Date *
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={paymentDate}
+                                        onChange={(e) => setPaymentDate(e.target.value)}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Payment Method *
+                                    </label>
+                                    <select
+                                        value={paymentMethod}
+                                        onChange={(e) => setPaymentMethod(e.target.value)}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                    >
+                                        <option value="cash">Cash</option>
+                                        <option value="bank_transfer">Bank Transfer</option>
+                                        <option value="check">Check</option>
+                                        <option value="credit_card">Credit Card</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Reference / Transaction ID
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={paymentReference}
+                                        onChange={(e) => setPaymentReference(e.target.value)}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                        placeholder="e.g., Check #1234, Transfer ID"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Notes
+                                    </label>
+                                    <textarea
+                                        value={paymentNote}
+                                        onChange={(e) => setPaymentNote(e.target.value)}
+                                        rows={3}
+                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                        placeholder="Additional notes about this payment"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="bg-gray-50 px-6 py-4 flex justify-end space-x-3 border-t">
+                            <button
+                                onClick={() => {
+                                    setShowPaymentModal(false);
+                                    setSelectedInvoice(null);
+                                }}
+                                className="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleAddPayment}
+                                disabled={!paymentAmount || parseFloat(paymentAmount) <= 0}
+                                className="px-6 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-medium shadow-md"
+                            >
+                                Add Payment
+                            </button>
                         </div>
                     </div>
                 </div>
