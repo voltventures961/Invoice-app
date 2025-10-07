@@ -21,15 +21,28 @@ const InvoicesPage = ({ navigateTo }) => {
     const [paymentMethod, setPaymentMethod] = useState('cash');
     const [paymentReference, setPaymentReference] = useState('');
     const [paymentNote, setPaymentNote] = useState('');
+    const [clientBalance, setClientBalance] = useState(0);
+    const [payFromAccount, setPayFromAccount] = useState(false);
+    const [payments, setPayments] = useState([]);
 
     useEffect(() => {
         if (!auth.currentUser) return;
-        
+
+        // Listen to payments
+        const paymentsQuery = query(collection(db, 'payments'));
+        const unsubscribePayments = onSnapshot(paymentsQuery, (snapshot) => {
+            const paymentsData = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setPayments(paymentsData);
+        });
+
         const q = query(
             collection(db, `documents/${auth.currentUser.uid}/userDocuments`),
             where('type', '==', 'invoice')
         );
-        
+
         const unsubscribe = onSnapshot(q, (querySnapshot) => {
             const activeDocs = [];
             const cancelledDocs = [];
@@ -60,14 +73,23 @@ const InvoicesPage = ({ navigateTo }) => {
             setLoading(false);
         });
 
-        return () => unsubscribe();
+        return () => {
+            unsubscribe();
+            unsubscribePayments();
+        };
     }, []);
+
+    // Calculate client account balance (unallocated payments)
+    const getClientBalance = (clientId) => {
+        const clientPayments = payments.filter(p => p.clientId === clientId && !p.settledToDocument);
+        return clientPayments.reduce((sum, p) => sum + p.amount, 0);
+    };
 
     // Calculate payment status
     const getPaymentStatus = (invoice) => {
         const totalPaid = invoice.totalPaid || 0;
         const total = invoice.total || 0;
-        
+
         if (totalPaid >= total) {
             return { status: 'paid', label: 'Paid', color: 'bg-green-100 text-green-800' };
         } else if (totalPaid > 0) {
@@ -85,9 +107,12 @@ const InvoicesPage = ({ navigateTo }) => {
     const openPaymentModal = (invoice) => {
         setSelectedInvoice(invoice);
         const remaining = invoice.total - (invoice.totalPaid || 0);
+        const balance = getClientBalance(invoice.client.id);
+        setClientBalance(balance);
         setPaymentAmount(remaining.toFixed(2));
         setPaymentNote('');
         setPaymentDate(new Date().toISOString().split('T')[0]);
+        setPayFromAccount(false);
         setShowPaymentModal(true);
     };
 
@@ -98,21 +123,81 @@ const InvoicesPage = ({ navigateTo }) => {
         try {
             const amount = parseFloat(paymentAmount);
 
-            // Add payment to the payments collection (allocated to this invoice)
-            const paymentData = {
-                clientId: selectedInvoice.client.id,
-                documentId: selectedInvoice.id,
-                amount: amount,
-                paymentDate: new Date(paymentDate),
-                paymentMethod: paymentMethod,
-                reference: paymentReference || `Invoice #${selectedInvoice.invoiceNumber}`,
-                notes: paymentNote,
-                settledToDocument: true, // Payment is allocated to this invoice
-                createdAt: new Date(),
-                updatedAt: new Date()
-            };
+            if (payFromAccount) {
+                // Pay from client account balance
+                if (clientBalance < amount) {
+                    alert(`Insufficient client balance. Available: $${clientBalance.toFixed(2)}, Required: $${amount.toFixed(2)}`);
+                    return;
+                }
 
-            await addDoc(collection(db, 'payments'), paymentData);
+                // Get unallocated payments for this client (FIFO)
+                const clientPayments = payments.filter(p => p.clientId === selectedInvoice.client.id && !p.settledToDocument);
+                clientPayments.sort((a, b) => {
+                    const dateA = a.paymentDate?.toDate ? a.paymentDate.toDate() : new Date(a.paymentDate);
+                    const dateB = b.paymentDate?.toDate ? b.paymentDate.toDate() : new Date(b.paymentDate);
+                    return dateA - dateB;
+                });
+
+                let remainingToSettle = amount;
+                for (const payment of clientPayments) {
+                    if (remainingToSettle <= 0) break;
+
+                    const amountToAllocate = Math.min(payment.amount, remainingToSettle);
+
+                    if (amountToAllocate === payment.amount) {
+                        // Full payment allocated to this invoice
+                        await updateDoc(doc(db, 'payments', payment.id), {
+                            documentId: selectedInvoice.id,
+                            settledToDocument: true,
+                            settledAt: new Date(),
+                            notes: (payment.notes || '') + ` | Allocated to invoice ${selectedInvoice.invoiceNumber}`,
+                            updatedAt: new Date()
+                        });
+                        remainingToSettle -= amountToAllocate;
+                    } else {
+                        // Partial payment - split
+                        await updateDoc(doc(db, 'payments', payment.id), {
+                            amount: amountToAllocate,
+                            documentId: selectedInvoice.id,
+                            settledToDocument: true,
+                            settledAt: new Date(),
+                            notes: (payment.notes || '') + ` | Partially allocated to invoice`,
+                            updatedAt: new Date()
+                        });
+
+                        // Create new payment for remaining unallocated amount
+                        const remainingUnallocated = payment.amount - amountToAllocate;
+                        const newPaymentData = {
+                            ...payment,
+                            amount: remainingUnallocated,
+                            settledToDocument: false,
+                            documentId: null,
+                            notes: (payment.notes || '') + ` | Split from original payment`,
+                            createdAt: new Date(),
+                            updatedAt: new Date()
+                        };
+                        delete newPaymentData.id;
+                        await addDoc(collection(db, 'payments'), newPaymentData);
+                        remainingToSettle = 0;
+                    }
+                }
+            } else {
+                // Add new payment to the payments collection (allocated to this invoice)
+                const paymentData = {
+                    clientId: selectedInvoice.client.id,
+                    documentId: selectedInvoice.id,
+                    amount: amount,
+                    paymentDate: new Date(paymentDate),
+                    paymentMethod: paymentMethod,
+                    reference: paymentReference || `Invoice #${selectedInvoice.invoiceNumber}`,
+                    notes: paymentNote,
+                    settledToDocument: true, // Payment is allocated to this invoice
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                };
+
+                await addDoc(collection(db, 'payments'), paymentData);
+            }
 
             // Update document payment status
             await updateDocumentPaymentStatus(selectedInvoice.id);
@@ -125,6 +210,7 @@ const InvoicesPage = ({ navigateTo }) => {
             setPaymentReference('');
             setPaymentMethod('cash');
             setPaymentDate(new Date().toISOString().split('T')[0]);
+            setPayFromAccount(false);
         } catch (error) {
             console.error("Error adding payment: ", error);
             alert("Error adding payment. Please try again.");
@@ -576,7 +662,7 @@ const InvoicesPage = ({ navigateTo }) => {
                         <div className="p-6 overflow-y-auto flex-1">
                             {/* Invoice Summary */}
                             <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-lg mb-6 border border-gray-200">
-                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                <div className="grid grid-cols-4 gap-4 text-sm">
                                     <div>
                                         <p className="text-gray-600 font-medium mb-1">Invoice Total</p>
                                         <p className="text-xl font-bold text-gray-900">${selectedInvoice.total.toFixed(2)}</p>
@@ -591,8 +677,43 @@ const InvoicesPage = ({ navigateTo }) => {
                                             ${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
                                         </p>
                                     </div>
+                                    <div>
+                                        <p className="text-gray-600 font-medium mb-1">Client Balance</p>
+                                        <p className="text-xl font-bold text-blue-600">${clientBalance.toFixed(2)}</p>
+                                    </div>
                                 </div>
                             </div>
+
+                            {/* Payment Source Selection */}
+                            {clientBalance > 0 && (
+                                <div className="mb-6 bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                                    <p className="text-sm font-semibold text-blue-900 mb-3">Payment Source</p>
+                                    <div className="space-y-2">
+                                        <label className="flex items-center cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name="paymentSource"
+                                                checked={!payFromAccount}
+                                                onChange={() => setPayFromAccount(false)}
+                                                className="mr-2"
+                                            />
+                                            <span className="text-sm text-gray-700">New Payment (Cash/Bank Transfer/etc.)</span>
+                                        </label>
+                                        <label className="flex items-center cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name="paymentSource"
+                                                checked={payFromAccount}
+                                                onChange={() => setPayFromAccount(true)}
+                                                className="mr-2"
+                                            />
+                                            <span className="text-sm text-gray-700">
+                                                Pay from Client Account Balance (${clientBalance.toFixed(2)} available)
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Payment Form */}
                             <div className="space-y-4">
@@ -606,71 +727,78 @@ const InvoicesPage = ({ navigateTo }) => {
                                         onChange={(e) => setPaymentAmount(e.target.value)}
                                         step="0.01"
                                         min="0.01"
-                                        max={selectedInvoice.total - (selectedInvoice.totalPaid || 0)}
+                                        max={payFromAccount ? Math.min(clientBalance, selectedInvoice.total - (selectedInvoice.totalPaid || 0)) : (selectedInvoice.total - (selectedInvoice.totalPaid || 0))}
                                         className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-lg"
                                         placeholder="0.00"
                                         required
                                     />
                                     <p className="text-xs text-gray-500 mt-1">
-                                        Maximum: ${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}
+                                        {payFromAccount
+                                            ? `Maximum from client balance: $${Math.min(clientBalance, selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}`
+                                            : `Maximum: $${(selectedInvoice.total - (selectedInvoice.totalPaid || 0)).toFixed(2)}`
+                                        }
                                     </p>
                                 </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                                        Payment Date *
-                                    </label>
-                                    <input
-                                        type="date"
-                                        value={paymentDate}
-                                        onChange={(e) => setPaymentDate(e.target.value)}
-                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                        required
-                                    />
-                                </div>
+                                {!payFromAccount && (
+                                    <>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                                Payment Date *
+                                            </label>
+                                            <input
+                                                type="date"
+                                                value={paymentDate}
+                                                onChange={(e) => setPaymentDate(e.target.value)}
+                                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                                required
+                                            />
+                                        </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                                        Payment Method *
-                                    </label>
-                                    <select
-                                        value={paymentMethod}
-                                        onChange={(e) => setPaymentMethod(e.target.value)}
-                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                    >
-                                        <option value="cash">Cash</option>
-                                        <option value="bank_transfer">Bank Transfer</option>
-                                        <option value="check">Check</option>
-                                        <option value="credit_card">Credit Card</option>
-                                        <option value="other">Other</option>
-                                    </select>
-                                </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                                Payment Method *
+                                            </label>
+                                            <select
+                                                value={paymentMethod}
+                                                onChange={(e) => setPaymentMethod(e.target.value)}
+                                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                            >
+                                                <option value="cash">Cash</option>
+                                                <option value="bank_transfer">Bank Transfer</option>
+                                                <option value="check">Check</option>
+                                                <option value="credit_card">Credit Card</option>
+                                                <option value="other">Other</option>
+                                            </select>
+                                        </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                                        Reference / Transaction ID
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={paymentReference}
-                                        onChange={(e) => setPaymentReference(e.target.value)}
-                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                        placeholder="e.g., Check #1234, Transfer ID"
-                                    />
-                                </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                                Reference / Transaction ID
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={paymentReference}
+                                                onChange={(e) => setPaymentReference(e.target.value)}
+                                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                                placeholder="e.g., Check #1234, Transfer ID"
+                                            />
+                                        </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                                        Notes
-                                    </label>
-                                    <textarea
-                                        value={paymentNote}
-                                        onChange={(e) => setPaymentNote(e.target.value)}
-                                        rows={3}
-                                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                        placeholder="Additional notes about this payment"
-                                    />
-                                </div>
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                                Notes
+                                            </label>
+                                            <textarea
+                                                value={paymentNote}
+                                                onChange={(e) => setPaymentNote(e.target.value)}
+                                                rows={3}
+                                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                                placeholder="Additional notes about this payment"
+                                            />
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
 

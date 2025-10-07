@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc, limit as firestoreLimit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc, limit as firestoreLimit, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { migratePayments, verifyMigration, repairMigratedPayments } from '../utils/paymentMigration';
 
@@ -29,6 +29,8 @@ const PaymentsPage = () => {
     const [showClientSettlement, setShowClientSettlement] = useState(false);
     const [selectedClientForSettlement, setSelectedClientForSettlement] = useState(null);
     const [showClientBalances, setShowClientBalances] = useState(false);
+    const [settlementInProgress, setSettlementInProgress] = useState(false);
+    const [customSettlementAmounts, setCustomSettlementAmounts] = useState({});
     const [clientSearchTerm, setClientSearchTerm] = useState('');
     const [isClientDropdownVisible, setIsClientDropdownVisible] = useState(false);
     const [selectedClient, setSelectedClient] = useState(null);
@@ -37,6 +39,7 @@ const PaymentsPage = () => {
     const [showPaymentReceipt, setShowPaymentReceipt] = useState(false);
     const [paymentSearchTerm, setPaymentSearchTerm] = useState('');
     const [displayedPaymentsLimit, setDisplayedPaymentsLimit] = useState(20);
+    const [userSettings, setUserSettings] = useState(null);
 
     // Handle click outside client dropdown
     useEffect(() => {
@@ -50,6 +53,23 @@ const PaymentsPage = () => {
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
+    }, []);
+
+    // Fetch user settings for receipt
+    useEffect(() => {
+        const fetchUserSettings = async () => {
+            if (!auth.currentUser) return;
+            const settingsRef = doc(db, 'settings', auth.currentUser.uid);
+            try {
+                const docSnap = await getDoc(settingsRef);
+                if (docSnap.exists()) {
+                    setUserSettings(docSnap.data());
+                }
+            } catch (error) {
+                console.error("Error fetching user settings:", error);
+            }
+        };
+        fetchUserSettings();
     }, []);
 
     useEffect(() => {
@@ -472,6 +492,24 @@ const PaymentsPage = () => {
 
     const handleDocumentChange = (documentId) => {
         const outstanding = getOutstandingAmount(documentId);
+        const selectedDocument = documents.find(d => d.id === documentId);
+
+        // Auto-select client when invoice is chosen
+        if (selectedDocument && selectedDocument.client) {
+            const client = clients.find(c => c.id === selectedDocument.client.id);
+            if (client) {
+                setSelectedClient(client);
+                setClientSearchTerm(client.name);
+                setFormData(prev => ({
+                    ...prev,
+                    clientId: client.id,
+                    documentId,
+                    amount: outstanding > 0 ? outstanding.toFixed(2) : ''
+                }));
+                return;
+            }
+        }
+
         setFormData(prev => ({
             ...prev,
             documentId,
@@ -480,7 +518,11 @@ const PaymentsPage = () => {
     };
 
     const handleSettleDocument = async (clientId, documentId, amount) => {
+        // Prevent double-click
+        if (settlementInProgress) return;
+
         try {
+            setSettlementInProgress(true);
             setLoading(true);
 
             // Check if client has enough unallocated balance
@@ -583,6 +625,7 @@ const PaymentsPage = () => {
             setFeedback({ type: 'error', message: 'Failed to settle invoice. Please try again.' });
         } finally {
             setLoading(false);
+            setSettlementInProgress(false);
         }
     };
 
@@ -1139,7 +1182,7 @@ const PaymentsPage = () => {
                             {/* Company Header */}
                             <div className="mb-8 pb-6 border-b-2 border-gray-300">
                                 <h3 className="text-3xl font-bold text-indigo-600 mb-1">Payment Receipt</h3>
-                                <p className="text-lg text-gray-700 font-medium mb-4">{clients.find(c => c.id === auth.currentUser?.uid)?.companyName || 'Your Company Name'}</p>
+                                <p className="text-lg text-gray-700 font-medium mb-4">{userSettings?.companyName || 'Your Company Name'}</p>
                                 <p className="text-sm text-gray-600">Receipt #{selectedPaymentForView.id.substring(0, 8).toUpperCase()}</p>
                             </div>
 
@@ -1405,17 +1448,12 @@ const PaymentsPage = () => {
                                                         return (
                                                             <div
                                                                 key={doc.id}
-                                                                onClick={() => {
-                                                                    if (!isPaid && canSettle > 0) {
-                                                                        handleSettleDocument(selectedClientForSettlement.id, doc.id, canSettle);
-                                                                    }
-                                                                }}
                                                                 className={`p-4 rounded-lg border-2 transition-all ${
                                                                     isPaid
                                                                         ? 'bg-green-50 border-green-300 opacity-60'
                                                                         : cannotSettle
                                                                         ? 'bg-gray-50 border-gray-300 opacity-60'
-                                                                        : 'bg-white border-orange-300 hover:border-indigo-500 hover:shadow-lg cursor-pointer transform hover:scale-[1.02]'
+                                                                        : 'bg-white border-orange-300 hover:border-indigo-500 hover:shadow-lg'
                                                                 }`}
                                                             >
                                                                 <div className="flex items-start justify-between gap-4">
@@ -1435,7 +1473,7 @@ const PaymentsPage = () => {
                                                                                 </span>
                                                                             )}
                                                                         </div>
-                                                                        <div className="grid grid-cols-3 gap-3 text-sm">
+                                                                        <div className="grid grid-cols-3 gap-3 text-sm mb-3">
                                                                             <div>
                                                                                 <span className="text-gray-600">Total:</span>
                                                                                 <span className="font-bold ml-2 text-gray-900">${docInfo.total.toFixed(2)}</span>
@@ -1451,6 +1489,29 @@ const PaymentsPage = () => {
                                                                                 </span>
                                                                             </div>
                                                                         </div>
+                                                                        {!isPaid && canSettle > 0 && (
+                                                                            <div className="mt-2">
+                                                                                <label className="block text-xs font-medium text-gray-700 mb-1">Settlement Amount</label>
+                                                                                <input
+                                                                                    type="number"
+                                                                                    step="0.01"
+                                                                                    min="0.01"
+                                                                                    max={canSettle}
+                                                                                    value={customSettlementAmounts[doc.id] || canSettle.toFixed(2)}
+                                                                                    onChange={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        setCustomSettlementAmounts({
+                                                                                            ...customSettlementAmounts,
+                                                                                            [doc.id]: e.target.value
+                                                                                        });
+                                                                                    }}
+                                                                                    onClick={(e) => e.stopPropagation()}
+                                                                                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                                                    placeholder="0.00"
+                                                                                />
+                                                                                <p className="text-xs text-gray-500 mt-1">Max: ${canSettle.toFixed(2)}</p>
+                                                                            </div>
+                                                                        )}
                                                                         {isPartialSettlement && !isPaid && (
                                                                             <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
                                                                                 <strong>Partial Settlement:</strong> Will allocate ${canSettle.toFixed(2)} from available balance.
@@ -1468,14 +1529,18 @@ const PaymentsPage = () => {
                                                                             <button
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
-                                                                                    handleSettleDocument(selectedClientForSettlement.id, doc.id, canSettle);
+                                                                                    const settleAmount = customSettlementAmounts[doc.id] ? parseFloat(customSettlementAmounts[doc.id]) : canSettle;
+                                                                                    if (settleAmount > 0 && settleAmount <= canSettle) {
+                                                                                        handleSettleDocument(selectedClientForSettlement.id, doc.id, settleAmount);
+                                                                                    }
                                                                                 }}
-                                                                                className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-semibold rounded-lg hover:from-green-700 hover:to-green-800 shadow-md hover:shadow-lg transition-all transform hover:scale-105"
+                                                                                disabled={settlementInProgress}
+                                                                                className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-semibold rounded-lg hover:from-green-700 hover:to-green-800 shadow-md hover:shadow-lg transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                                                                             >
                                                                                 <div className="text-center">
-                                                                                    <div className="text-sm">Settle</div>
-                                                                                    <div className="text-lg">${canSettle.toFixed(2)}</div>
-                                                                                    {isPartialSettlement && <div className="text-xs opacity-90">(Partial)</div>}
+                                                                                    <div className="text-sm">{settlementInProgress ? 'Settling...' : 'Settle'}</div>
+                                                                                    <div className="text-lg">${(customSettlementAmounts[doc.id] ? parseFloat(customSettlementAmounts[doc.id]) : canSettle).toFixed(2)}</div>
+                                                                                    {((customSettlementAmounts[doc.id] ? parseFloat(customSettlementAmounts[doc.id]) : canSettle) < outstanding) && <div className="text-xs opacity-90">(Partial)</div>}
                                                                                 </div>
                                                                             </button>
                                                                         </div>

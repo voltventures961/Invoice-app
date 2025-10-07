@@ -11,7 +11,7 @@ const AccountingPage = () => {
     const [categoryFilter, setCategoryFilter] = useState('all'); // 'all', 'labor', 'items'
     const [clientFilter, setClientFilter] = useState('all'); // 'all' or client id
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'paid', 'unpaid', 'overdue'
-    const [documentTypeFilter, setDocumentTypeFilter] = useState('all'); // 'all', 'invoice', 'proforma'
+    const [documentTypeFilter, setDocumentTypeFilter] = useState('invoice'); // 'all', 'invoice', 'proforma' - Default to 'invoice'
  // 'include', 'exclude', 'only'
     const [sortColumn, setSortColumn] = useState('date'); // Column to sort by
     const [sortDirection, setSortDirection] = useState('desc'); // 'asc' or 'desc'
@@ -488,16 +488,17 @@ const AccountingPage = () => {
                     </div>
                     
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                        <select 
-                            value={categoryFilter} 
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Revenue Type</label>
+                        <select
+                            value={categoryFilter}
                             onChange={(e) => setCategoryFilter(e.target.value)}
                             className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
-                            <option value="all">All Categories</option>
-                            <option value="labor">Labor Only</option>
-                            <option value="items">Items Only</option>
+                            <option value="all">All Types</option>
+                            <option value="labor">With Labor/Services</option>
+                            <option value="items">With Items/Products</option>
                         </select>
+                        <p className="text-xs text-gray-500 mt-1">Filter by revenue source</p>
                     </div>
                     
                     <div>
