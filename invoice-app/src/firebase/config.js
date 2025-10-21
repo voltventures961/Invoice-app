@@ -13,7 +13,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
       apiKey: "AIzaSyCqBJKP95b_Mflu0Npg6YUbkQ3W-dXNrfc",
       authDomain: "voltventures-ec8c4.firebaseapp.com",
       projectId: "voltventures-ec8c4",
-      storageBucket: "voltventures-ec8c4.firebasestorage.app",
+      storageBucket: "voltventures-ec8c4.appspot.com",  // Fixed: Use .appspot.com for storage
       messagingSenderId: "326689103951",
       appId: "1:326689103951:web:0acd6ce51513b17f2e4a3a"
     };

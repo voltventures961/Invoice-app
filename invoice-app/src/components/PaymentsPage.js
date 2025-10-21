@@ -107,9 +107,11 @@ const PaymentsPage = () => {
                 setDocuments(documentsData);
 
                 // Listen to payments (real-time) - this is the main data source
+                // CRITICAL FIX: Filter payments by current user to ensure data isolation
+                // Note: We sort in JavaScript to avoid needing a Firebase composite index
                 const paymentsQuery = query(
                     collection(db, 'payments'),
-                    orderBy('paymentDate', 'desc')
+                    where('userId', '==', auth.currentUser.uid)
                 );
 
                 unsubscribePayments = onSnapshot(paymentsQuery, (snapshot) => {
@@ -117,6 +119,12 @@ const PaymentsPage = () => {
                         id: doc.id,
                         ...doc.data()
                     }));
+                    // Sort by paymentDate in JavaScript (newest first)
+                    paymentsData.sort((a, b) => {
+                        const dateA = a.paymentDate?.toDate ? a.paymentDate.toDate() : new Date(a.paymentDate);
+                        const dateB = b.paymentDate?.toDate ? b.paymentDate.toDate() : new Date(b.paymentDate);
+                        return dateB - dateA;
+                    });
                     setPayments(paymentsData);
                     setLoading(false);
                 }, (error) => {
@@ -244,6 +252,7 @@ const PaymentsPage = () => {
             }
 
             const paymentData = {
+                userId: auth.currentUser.uid, // CRITICAL: Add userId for data isolation
                 clientId: formData.clientId,
                 documentId: paymentType === 'toDocument' ? formData.documentId : null,
                 amount: parseFloat(formData.amount),
@@ -302,8 +311,12 @@ const PaymentsPage = () => {
 
     const updateDocumentPaymentStatus = async (documentId) => {
         try {
-            // Get all payments for this document
-            const paymentsQuery = query(collection(db, 'payments'), where('documentId', '==', documentId));
+            // Get all payments for this document (filtered by user)
+            const paymentsQuery = query(
+                collection(db, 'payments'),
+                where('userId', '==', auth.currentUser.uid),
+                where('documentId', '==', documentId)
+            );
             const paymentsSnapshot = await getDocs(paymentsQuery);
             
             let totalPaid = 0;
@@ -591,6 +604,7 @@ const PaymentsPage = () => {
                     const remainingUnallocated = payment.amount - amountToAllocate;
                     const newPaymentData = {
                         ...payment,
+                        userId: auth.currentUser.uid, // Ensure userId is set for split payment
                         amount: remainingUnallocated,
                         settledToDocument: false,
                         documentId: null,
@@ -646,6 +660,13 @@ const PaymentsPage = () => {
                             Migrate Old Payments
                         </button>
                     )}
+                    <button
+                        onClick={handleRepair}
+                        className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
+                        title="Click to add userId to all your existing payments (run once per account)"
+                    >
+                        Fix Payment Data (Run Once)
+                    </button>
                 </div>
             </div>
 
