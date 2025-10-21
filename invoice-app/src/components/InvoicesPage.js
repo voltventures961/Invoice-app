@@ -24,6 +24,7 @@ const InvoicesPage = ({ navigateTo }) => {
     const [clientBalance, setClientBalance] = useState(0);
     const [payFromAccount, setPayFromAccount] = useState(false);
     const [payments, setPayments] = useState([]);
+    const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
     useEffect(() => {
         if (!auth.currentUser) return;
@@ -121,7 +122,15 @@ const InvoicesPage = ({ navigateTo }) => {
 
     // Handle add payment
     const handleAddPayment = async () => {
+        // Prevent double submission
+        if (isSubmittingPayment) {
+            console.log('Payment submission already in progress, ignoring duplicate request');
+            return;
+        }
+
         if (!selectedInvoice || !paymentAmount || parseFloat(paymentAmount) <= 0) return;
+
+        setIsSubmittingPayment(true);
 
         try {
             const amount = parseFloat(paymentAmount);
@@ -219,6 +228,9 @@ const InvoicesPage = ({ navigateTo }) => {
         } catch (error) {
             console.error("Error adding payment: ", error);
             alert("Error adding payment. Please try again.");
+        } finally {
+            // Re-enable submission after operation completes
+            setIsSubmittingPayment(false);
         }
     };
 
@@ -820,10 +832,10 @@ const InvoicesPage = ({ navigateTo }) => {
                             </button>
                             <button
                                 onClick={handleAddPayment}
-                                disabled={!paymentAmount || parseFloat(paymentAmount) <= 0}
+                                disabled={!paymentAmount || parseFloat(paymentAmount) <= 0 || isSubmittingPayment}
                                 className="px-6 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-medium shadow-md"
                             >
-                                Add Payment
+                                {isSubmittingPayment ? 'Processing...' : 'Add Payment'}
                             </button>
                         </div>
                     </div>

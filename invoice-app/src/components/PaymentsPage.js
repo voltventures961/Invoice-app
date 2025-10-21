@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, getDocs, orderBy, deleteDoc, limit as firestoreLimit, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
-import { migratePayments, verifyMigration, repairMigratedPayments } from '../utils/paymentMigration';
+import { migratePayments, verifyMigration } from '../utils/paymentMigration';
 
 const PaymentsPage = () => {
     const [payments, setPayments] = useState([]);
@@ -170,31 +170,6 @@ const PaymentsPage = () => {
         } catch (error) {
             console.error('Migration error:', error);
             setFeedback({ type: 'error', message: 'Migration failed. Please try again.' });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleRepair = async () => {
-        if (!auth.currentUser) return;
-
-        setLoading(true);
-        setFeedback({ type: '', message: '' });
-
-        try {
-            const result = await repairMigratedPayments(auth.currentUser.uid);
-            if (result.success) {
-                const totalFixed = (result.emergencyFixCount || 0) + result.repairedCount;
-                setFeedback({
-                    type: 'success',
-                    message: `Repair completed successfully! Added userId to ${result.emergencyFixCount || 0} payments. Fixed ${result.repairedCount} payment details. Corrected settlement status on ${result.fixedSettlement} payments.`
-                });
-            } else {
-                setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
-            }
-        } catch (error) {
-            console.error('Repair error:', error);
-            setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -661,13 +636,6 @@ const PaymentsPage = () => {
                             Migrate Old Payments
                         </button>
                     )}
-                    <button
-                        onClick={handleRepair}
-                        className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg shadow-md"
-                        title="Click to add userId to all your existing payments (run once per account)"
-                    >
-                        Fix Payment Data (Run Once)
-                    </button>
                 </div>
             </div>
 

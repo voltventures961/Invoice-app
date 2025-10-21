@@ -3,6 +3,7 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile, updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { auth, db, storage } from '../firebase/config';
+import { repairMigratedPayments } from '../utils/paymentMigration';
 
 const SettingsPage = () => {
     const [companyName, setCompanyName] = useState('');
@@ -83,25 +84,60 @@ const SettingsPage = () => {
 
         if (imageFile) {
             try {
-                // Create a unique filename to avoid conflicts
-                const timestamp = Date.now();
-                const fileName = `${timestamp}_${imageFile.name}`;
-                const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
-                
-                // Upload the file
-                setUploadProgress(50);
-                const snapshot = await uploadBytes(storageRef, imageFile);
-                
-                // Get the download URL
-                setUploadProgress(75);
-                newLogoUrl = await getDownloadURL(snapshot.ref);
-                setLogoUrl(newLogoUrl);
-                setUploadProgress(100);
+                // Check file size for base64 storage (limit to 1MB for Firestore)
+                if (imageFile.size > 1 * 1024 * 1024) {
+                    setFeedback({
+                        type: 'error',
+                        message: 'Logo file is too large. Please use an image under 1MB or configure CORS for Firebase Storage.'
+                    });
+                    setLoading(false);
+                    setImageFile(null);
+                    return;
+                }
+
+                // Try Firebase Storage first
+                setUploadProgress(25);
+                try {
+                    const timestamp = Date.now();
+                    const fileName = `${timestamp}_${imageFile.name}`;
+                    const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
+
+                    setUploadProgress(50);
+                    const snapshot = await uploadBytes(storageRef, imageFile);
+
+                    setUploadProgress(75);
+                    newLogoUrl = await getDownloadURL(snapshot.ref);
+                    setLogoUrl(newLogoUrl);
+                    setUploadProgress(100);
+                    console.log('Logo uploaded to Firebase Storage successfully');
+                } catch (storageError) {
+                    // If Storage fails (CORS error), fall back to base64
+                    console.warn('Firebase Storage upload failed, using base64 fallback:', storageError);
+
+                    setUploadProgress(50);
+                    // Convert image to base64
+                    const reader = new FileReader();
+                    const base64Promise = new Promise((resolve, reject) => {
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(imageFile);
+                    });
+
+                    newLogoUrl = await base64Promise;
+                    setLogoUrl(newLogoUrl);
+                    setUploadProgress(100);
+                    console.log('Logo stored as base64 (CORS workaround)');
+                    setFeedback({
+                        type: 'success',
+                        message: 'Logo saved successfully! Note: To enable direct storage uploads, please configure CORS for Firebase Storage.'
+                    });
+                }
             } catch (error) {
-                console.error("Upload failed:", error);
-                setFeedback({ type: 'error', message: `Logo upload failed: ${error.message}` });
+                console.error("Logo save failed:", error);
+                setFeedback({ type: 'error', message: `Logo save failed: ${error.message}` });
                 setLoading(false);
                 setUploadProgress(0);
+                setImageFile(null);
                 return;
             }
         }
@@ -236,6 +272,16 @@ const SettingsPage = () => {
                             }`}
                         >
                             Account Settings
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('advanced')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeTab === 'advanced'
+                                    ? 'border-indigo-500 text-indigo-600'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            }`}
+                        >
+                            Advanced
                         </button>
                     </nav>
                 </div>
@@ -420,6 +466,75 @@ const SettingsPage = () => {
                                     >
                                         {loading ? 'Updating...' : 'Update Password'}
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'advanced' && (
+                    <div className="space-y-6">
+                        <div className="border-b border-gray-200 pb-6">
+                            <h3 className="text-lg font-medium text-gray-900 mb-4">Payment Data Management</h3>
+                            <p className="text-sm text-gray-600 mb-4">
+                                Use this tool to fix payment data isolation issues. This ensures all your payments have the correct user ID and are properly associated with your account.
+                            </p>
+                            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
+                                <div className="flex">
+                                    <div className="flex-shrink-0">
+                                        <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                        </svg>
+                                    </div>
+                                    <div className="ml-3">
+                                        <p className="text-sm text-yellow-700">
+                                            <strong>Important:</strong> Only run this if you're experiencing issues with payments not appearing, or if instructed by support. This operation is safe and can be run multiple times.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={async () => {
+                                    if (!auth.currentUser) return;
+                                    setLoading(true);
+                                    setFeedback({ type: '', message: '' });
+                                    try {
+                                        const result = await repairMigratedPayments(auth.currentUser.uid);
+                                        if (result.success) {
+                                            setFeedback({
+                                                type: 'success',
+                                                message: `Repair completed successfully! Added userId to ${result.emergencyFixCount || 0} payments. Fixed ${result.repairedCount} payment details. Corrected settlement status on ${result.fixedSettlement} payments.`
+                                            });
+                                        } else {
+                                            setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
+                                        }
+                                    } catch (error) {
+                                        console.error('Repair error:', error);
+                                        setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
+                                    } finally {
+                                        setLoading(false);
+                                    }
+                                }}
+                                disabled={loading}
+                                className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md disabled:bg-red-300"
+                            >
+                                {loading ? 'Repairing...' : 'Fix Payment Data'}
+                            </button>
+                            <p className="text-xs text-gray-500 mt-2">
+                                This will scan all payments and ensure they're properly associated with your user account.
+                            </p>
+                        </div>
+
+                        <div className="border-b border-gray-200 pb-6">
+                            <h3 className="text-lg font-medium text-gray-900 mb-4">Database Information</h3>
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">User ID:</span>
+                                    <span className="font-mono text-gray-900">{auth.currentUser?.uid}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Account Email:</span>
+                                    <span className="text-gray-900">{auth.currentUser?.email}</span>
                                 </div>
                             </div>
                         </div>
