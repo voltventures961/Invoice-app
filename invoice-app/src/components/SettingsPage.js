@@ -94,47 +94,31 @@ const SettingsPage = () => {
                 return;
             }
 
-            // Try Firebase Storage first
-            setUploadProgress(25);
+            // Convert to base64 (skip Firebase Storage for now due to CORS)
+            // Once CORS is configured, we can enable Storage upload
+            console.log('Converting logo to base64 (CORS workaround)');
+            setUploadProgress(50);
+
             try {
-                const timestamp = Date.now();
-                const fileName = `${timestamp}_${imageFile.name}`;
-                const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
+                // Convert image to base64
+                const reader = new FileReader();
+                const base64Promise = new Promise((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(imageFile);
+                });
 
-                setUploadProgress(50);
-                const snapshot = await uploadBytes(storageRef, imageFile);
-
-                setUploadProgress(75);
-                newLogoUrl = await getDownloadURL(snapshot.ref);
+                newLogoUrl = await base64Promise;
                 setLogoUrl(newLogoUrl);
                 setUploadProgress(100);
-                console.log('Logo uploaded to Firebase Storage successfully');
-            } catch (storageError) {
-                // If Storage fails (CORS error), fall back to base64
-                console.warn('Firebase Storage upload failed, using base64 fallback:', storageError);
-
-                try {
-                    setUploadProgress(50);
-                    // Convert image to base64
-                    const reader = new FileReader();
-                    const base64Promise = new Promise((resolve, reject) => {
-                        reader.onload = () => resolve(reader.result);
-                        reader.onerror = reject;
-                        reader.readAsDataURL(imageFile);
-                    });
-
-                    newLogoUrl = await base64Promise;
-                    setLogoUrl(newLogoUrl);
-                    setUploadProgress(100);
-                    console.log('Logo stored as base64 (CORS workaround)');
-                } catch (base64Error) {
-                    console.error("Base64 conversion failed:", base64Error);
-                    setFeedback({ type: 'error', message: `Logo save failed: ${base64Error.message}` });
-                    setLoading(false);
-                    setUploadProgress(0);
-                    setImageFile(null);
-                    return;
-                }
+                console.log('Logo stored as base64 successfully');
+            } catch (base64Error) {
+                console.error("Base64 conversion failed:", base64Error);
+                setFeedback({ type: 'error', message: `Logo save failed: ${base64Error.message}` });
+                setLoading(false);
+                setUploadProgress(0);
+                setImageFile(null);
+                return;
             }
         }
 
@@ -152,7 +136,7 @@ const SettingsPage = () => {
             if (imageFile && newLogoUrl && newLogoUrl.startsWith('data:')) {
                 setFeedback({
                     type: 'success',
-                    message: 'Settings saved successfully! Logo stored locally. To enable cloud storage, please configure CORS for Firebase Storage.'
+                    message: 'Settings saved! Logo stored as base64. To use cloud storage instead, configure CORS for Firebase Storage (see docs).'
                 });
             } else {
                 setFeedback({ type: 'success', message: 'Settings saved successfully!' });
