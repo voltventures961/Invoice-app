@@ -83,37 +83,37 @@ const SettingsPage = () => {
         let newLogoUrl = logoUrl;
 
         if (imageFile) {
+            // Check file size for base64 storage (limit to 1MB for Firestore)
+            if (imageFile.size > 1 * 1024 * 1024) {
+                setFeedback({
+                    type: 'error',
+                    message: 'Logo file is too large. Please use an image under 1MB or configure CORS for Firebase Storage.'
+                });
+                setLoading(false);
+                setImageFile(null);
+                return;
+            }
+
+            // Try Firebase Storage first
+            setUploadProgress(25);
             try {
-                // Check file size for base64 storage (limit to 1MB for Firestore)
-                if (imageFile.size > 1 * 1024 * 1024) {
-                    setFeedback({
-                        type: 'error',
-                        message: 'Logo file is too large. Please use an image under 1MB or configure CORS for Firebase Storage.'
-                    });
-                    setLoading(false);
-                    setImageFile(null);
-                    return;
-                }
+                const timestamp = Date.now();
+                const fileName = `${timestamp}_${imageFile.name}`;
+                const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
 
-                // Try Firebase Storage first
-                setUploadProgress(25);
+                setUploadProgress(50);
+                const snapshot = await uploadBytes(storageRef, imageFile);
+
+                setUploadProgress(75);
+                newLogoUrl = await getDownloadURL(snapshot.ref);
+                setLogoUrl(newLogoUrl);
+                setUploadProgress(100);
+                console.log('Logo uploaded to Firebase Storage successfully');
+            } catch (storageError) {
+                // If Storage fails (CORS error), fall back to base64
+                console.warn('Firebase Storage upload failed, using base64 fallback:', storageError);
+
                 try {
-                    const timestamp = Date.now();
-                    const fileName = `${timestamp}_${imageFile.name}`;
-                    const storageRef = ref(storage, `logos/${auth.currentUser.uid}/${fileName}`);
-
-                    setUploadProgress(50);
-                    const snapshot = await uploadBytes(storageRef, imageFile);
-
-                    setUploadProgress(75);
-                    newLogoUrl = await getDownloadURL(snapshot.ref);
-                    setLogoUrl(newLogoUrl);
-                    setUploadProgress(100);
-                    console.log('Logo uploaded to Firebase Storage successfully');
-                } catch (storageError) {
-                    // If Storage fails (CORS error), fall back to base64
-                    console.warn('Firebase Storage upload failed, using base64 fallback:', storageError);
-
                     setUploadProgress(50);
                     // Convert image to base64
                     const reader = new FileReader();
@@ -127,31 +127,36 @@ const SettingsPage = () => {
                     setLogoUrl(newLogoUrl);
                     setUploadProgress(100);
                     console.log('Logo stored as base64 (CORS workaround)');
-                    setFeedback({
-                        type: 'success',
-                        message: 'Logo saved successfully! Note: To enable direct storage uploads, please configure CORS for Firebase Storage.'
-                    });
+                } catch (base64Error) {
+                    console.error("Base64 conversion failed:", base64Error);
+                    setFeedback({ type: 'error', message: `Logo save failed: ${base64Error.message}` });
+                    setLoading(false);
+                    setUploadProgress(0);
+                    setImageFile(null);
+                    return;
                 }
-            } catch (error) {
-                console.error("Logo save failed:", error);
-                setFeedback({ type: 'error', message: `Logo save failed: ${error.message}` });
-                setLoading(false);
-                setUploadProgress(0);
-                setImageFile(null);
-                return;
             }
         }
 
         const settingsRef = doc(db, 'settings', auth.currentUser.uid);
         try {
-            await setDoc(settingsRef, { 
-                companyName, 
+            await setDoc(settingsRef, {
+                companyName,
                 companyAddress,
                 companyPhone,
                 companyVatNumber,
-                logoUrl: newLogoUrl 
+                logoUrl: newLogoUrl
             }, { merge: true });
-            setFeedback({ type: 'success', message: 'Settings saved successfully!' });
+
+            // Show appropriate success message
+            if (imageFile && newLogoUrl && newLogoUrl.startsWith('data:')) {
+                setFeedback({
+                    type: 'success',
+                    message: 'Settings saved successfully! Logo stored locally. To enable cloud storage, please configure CORS for Firebase Storage.'
+                });
+            } else {
+                setFeedback({ type: 'success', message: 'Settings saved successfully!' });
+            }
         } catch (error) {
             console.error("Error saving settings:", error);
             setFeedback({ type: 'error', message: 'Failed to save settings.' });
@@ -221,7 +226,7 @@ const SettingsPage = () => {
             // Re-authenticate user before changing password
             const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPassword);
             await reauthenticateWithCredential(auth.currentUser, credential);
-            
+
             await updatePassword(auth.currentUser, newPassword);
             setFeedback({ type: 'success', message: 'Password updated successfully!' });
             setCurrentPassword('');
@@ -236,6 +241,28 @@ const SettingsPage = () => {
             } else {
                 setFeedback({ type: 'error', message: 'Failed to update password.' });
             }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRepairPayments = async () => {
+        if (!auth.currentUser) return;
+        setLoading(true);
+        setFeedback({ type: '', message: '' });
+        try {
+            const result = await repairMigratedPayments(auth.currentUser.uid);
+            if (result.success) {
+                setFeedback({
+                    type: 'success',
+                    message: `Repair completed successfully! Added userId to ${result.emergencyFixCount || 0} payments. Fixed ${result.repairedCount} payment details. Corrected settlement status on ${result.fixedSettlement} payments.`
+                });
+            } else {
+                setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
+            }
+        } catch (error) {
+            console.error('Repair error:', error);
+            setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -494,27 +521,7 @@ const SettingsPage = () => {
                                 </div>
                             </div>
                             <button
-                                onClick={async () => {
-                                    if (!auth.currentUser) return;
-                                    setLoading(true);
-                                    setFeedback({ type: '', message: '' });
-                                    try {
-                                        const result = await repairMigratedPayments(auth.currentUser.uid);
-                                        if (result.success) {
-                                            setFeedback({
-                                                type: 'success',
-                                                message: `Repair completed successfully! Added userId to ${result.emergencyFixCount || 0} payments. Fixed ${result.repairedCount} payment details. Corrected settlement status on ${result.fixedSettlement} payments.`
-                                            });
-                                        } else {
-                                            setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });
-                                        }
-                                    } catch (error) {
-                                        console.error('Repair error:', error);
-                                        setFeedback({ type: 'error', message: 'Repair failed. Please try again.' });
-                                    } finally {
-                                        setLoading(false);
-                                    }
-                                }}
+                                onClick={handleRepairPayments}
                                 disabled={loading}
                                 className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md disabled:bg-red-300"
                             >
