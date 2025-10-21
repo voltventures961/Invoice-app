@@ -28,8 +28,11 @@ const InvoicesPage = ({ navigateTo }) => {
     useEffect(() => {
         if (!auth.currentUser) return;
 
-        // Listen to payments
-        const paymentsQuery = query(collection(db, 'payments'));
+        // Listen to payments (filtered by current user)
+        const paymentsQuery = query(
+            collection(db, 'payments'),
+            where('userId', '==', auth.currentUser.uid)
+        );
         const unsubscribePayments = onSnapshot(paymentsQuery, (snapshot) => {
             const paymentsData = snapshot.docs.map(doc => ({
                 id: doc.id,
@@ -169,6 +172,7 @@ const InvoicesPage = ({ navigateTo }) => {
                         const remainingUnallocated = payment.amount - amountToAllocate;
                         const newPaymentData = {
                             ...payment,
+                            userId: auth.currentUser.uid, // Ensure userId is set for split payment
                             amount: remainingUnallocated,
                             settledToDocument: false,
                             documentId: null,
@@ -184,6 +188,7 @@ const InvoicesPage = ({ navigateTo }) => {
             } else {
                 // Add new payment to the payments collection (allocated to this invoice)
                 const paymentData = {
+                    userId: auth.currentUser.uid, // CRITICAL: Add userId for data isolation
                     clientId: selectedInvoice.client.id,
                     documentId: selectedInvoice.id,
                     amount: amount,

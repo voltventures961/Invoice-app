@@ -184,9 +184,10 @@ const PaymentsPage = () => {
         try {
             const result = await repairMigratedPayments(auth.currentUser.uid);
             if (result.success) {
+                const totalFixed = (result.emergencyFixCount || 0) + result.repairedCount;
                 setFeedback({
                     type: 'success',
-                    message: `Repair completed successfully! Fixed ${result.repairedCount} payments. Corrected settlement status on ${result.fixedSettlement} payments.`
+                    message: `Repair completed successfully! Added userId to ${result.emergencyFixCount || 0} payments. Fixed ${result.repairedCount} payment details. Corrected settlement status on ${result.fixedSettlement} payments.`
                 });
             } else {
                 setFeedback({ type: 'error', message: `Repair failed: ${result.error}` });

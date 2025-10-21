@@ -215,12 +215,64 @@ export const rollbackMigration = async (userId) => {
     }
 };
 
+// EMERGENCY: Fix payments that are missing userId field
+export const fixPaymentsWithoutUserId = async (userId) => {
+    try {
+        console.log('Starting emergency fix for payments without userId...');
+
+        // Get ALL payments (no filter) to find ones without userId
+        const allPaymentsQuery = query(collection(db, 'payments'));
+        const allPaymentsSnapshot = await getDocs(allPaymentsQuery);
+        let fixedCount = 0;
+        let skippedCount = 0;
+
+        // Get all user's documents to match payments
+        const documentsQuery = query(collection(db, `documents/${userId}/userDocuments`));
+        const documentsSnapshot = await getDocs(documentsQuery);
+        const userDocumentIds = new Set(documentsSnapshot.docs.map(doc => doc.id));
+
+        console.log(`Found ${allPaymentsSnapshot.size} total payments, checking for user's documents...`);
+
+        for (const paymentDoc of allPaymentsSnapshot.docs) {
+            const payment = paymentDoc.data();
+
+            // If payment already has userId, skip it
+            if (payment.userId) {
+                skippedCount++;
+                continue;
+            }
+
+            // If payment has documentId that belongs to this user, fix it
+            if (payment.documentId && userDocumentIds.has(payment.documentId)) {
+                await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                    userId: userId,
+                    repaired: true,
+                    repairedAt: new Date()
+                });
+                fixedCount++;
+                console.log(`Fixed payment ${paymentDoc.id} - added userId for document ${payment.documentId}`);
+            }
+        }
+
+        console.log(`Emergency fix completed. Fixed ${fixedCount} payments. Skipped ${skippedCount} payments that already had userId.`);
+        return { success: true, fixedCount, skippedCount };
+
+    } catch (error) {
+        console.error('Emergency fix failed:', error);
+        return { success: false, error: error.message };
+    }
+};
+
 // Comprehensive repair function to fix all payment data
 export const repairMigratedPayments = async (userId) => {
     try {
         console.log('Starting comprehensive payment repair...');
 
-        // Get all payments (not just migrated ones) - filtered by user
+        // First run emergency fix for payments without userId
+        const emergencyFix = await fixPaymentsWithoutUserId(userId);
+        console.log(`Emergency fix result: ${emergencyFix.fixedCount} payments fixed`);
+
+        // Get all payments (including ones we just fixed)
         const paymentsQuery = query(
             collection(db, 'payments'),
             where('userId', '==', userId)
@@ -321,7 +373,12 @@ export const repairMigratedPayments = async (userId) => {
         }
 
         console.log(`Payment repair completed. Repaired ${repairedCount} payments. Fixed settlement status on ${fixedSettlement} payments.`);
-        return { success: true, repairedCount, fixedSettlement };
+        return {
+            success: true,
+            repairedCount,
+            fixedSettlement,
+            emergencyFixCount: emergencyFix.fixedCount
+        };
 
     } catch (error) {
         console.error('Payment repair failed:', error);
